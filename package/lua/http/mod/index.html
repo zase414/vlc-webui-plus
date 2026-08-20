@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VLC Web UI Plus</title>
+<link rel="stylesheet" href="mod.css">
+<link rel="icon" href="/favicon.ico">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <b>VLC Web UI Plus</b>
+    <span class="sub" id="vlcver">&mdash;</span>
+    <span class="spacer"></span>
+    <span id="conn">connecting</span>
+    <button class="sq" id="btnrefresh" title="Refresh now">&#8635;</button>
+  </div>
+  <nav id="tabs">
+    <button data-tab="now" class="sel">Now Playing</button>
+    <button data-tab="audio">Audio</button>
+    <button data-tab="subs">Subtitles</button>
+    <button data-tab="video">Video</button>
+    <button data-tab="playlist">Playlist</button>
+    <button data-tab="browse">Browse</button>
+    <button data-tab="keys">Hotkeys</button>
+    <button data-tab="info">Info</button>
+  </nav>
+</header>
+
+<main>
+
+<!-- ================= NOW PLAYING ================= -->
+<section id="tab-now" class="sel">
+  <div class="card">
+    <div class="np">
+      <img id="art" alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
+      <div class="meta">
+        <div class="t" id="np-title">Nothing playing</div>
+        <div class="muted small" id="np-artist"></div>
+        <div class="muted small" id="np-state"></div>
+        <input type="range" id="seek" min="0" max="1000" value="0">
+        <div class="times"><span id="t-now">0:00</span><span id="t-len">0:00</span></div>
+        <div class="row transport">
+          <button class="sq" data-key="play-pause" title="Play / Pause">&#9654;&#10073;&#10073;</button>
+          <button class="sq" data-cmd="pl_stop" title="Stop">&#9632;</button>
+          <button class="sq" data-cmd="pl_previous" title="Previous">&#9198;</button>
+          <button class="sq" data-cmd="pl_next" title="Next">&#9197;</button>
+          <button class="sq" data-seek="-10">-10s</button>
+          <button class="sq" data-seek="+10">+10s</button>
+          <button class="sq" data-seek="-60">-1m</button>
+          <button class="sq" data-seek="+60">+1m</button>
+          <button class="sq" data-key="frame-next" title="Next frame">&#9193;|</button>
+          <button class="sq" data-cmd="fullscreen" title="Fullscreen">&#9974;</button>
+          <button class="sq" data-cmd="snapshot" title="Snapshot">&#128247;</button>
+          <button class="sq" data-key="record" title="Record">&#9210;</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div class="field">
+        <label>Volume <span class="val" id="vol-val"></span></label>
+        <div class="row">
+          <button class="sq" data-key="vol-mute" title="Mute">&#128264;</button>
+          <input type="range" id="vol" min="0" max="200" step="1">
+        </div>
+      </div>
+      <div class="field">
+        <label>Playback speed <span class="val" id="rate-val"></span></label>
+        <div class="row">
+          <input type="range" id="rate" min="0.25" max="4" step="0.05">
+          <button class="sq" data-rate="1">1x</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Playback mode</label>
+        <div class="row tight">
+          <button id="b-random" data-cmd="pl_random">Random</button>
+          <button id="b-loop" data-cmd="pl_loop">Loop all</button>
+          <button id="b-repeat" data-cmd="pl_repeat">Repeat one</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Title / Chapter</label>
+        <div class="row">
+          <select id="sel-title"></select>
+          <select id="sel-chapter"></select>
+        </div>
+      </div>
+      <div class="field">
+        <label>On-screen message</label>
+        <div class="row">
+          <input type="text" id="osd-text" placeholder="Text to show on the TV">
+          <button id="osd-send">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= AUDIO ================= -->
+<section id="tab-audio">
+  <div class="card">
+    <h2>Output &amp; tracks</h2>
+    <div class="grid">
+      <div class="field">
+        <label>Audio track</label>
+        <select id="sel-audio-es"></select>
+      </div>
+      <div class="field">
+        <label>Audio device</label>
+        <div class="row">
+          <select id="sel-device"></select>
+          <button class="sq" data-key="audiodevice-cycle" title="Cycle audio device">&#8635;</button>
+        </div>
+        <input type="text" id="device-manual" placeholder="or type a device id and press Enter">
+      </div>
+      <div class="field">
+        <label>Stereo / channel mode</label>
+        <select id="sel-stereo"></select>
+      </div>
+      <div class="field">
+        <label>Audio delay <span class="val" id="adelay-val"></span></label>
+        <div class="row">
+          <button class="sq" data-key="audiodelay-down">-50ms</button>
+          <input type="number" id="adelay" step="0.05">
+          <button class="sq" data-key="audiodelay-up">+50ms</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Mute</label>
+        <button id="b-mute">Muted</button>
+      </div>
+      <div class="field">
+        <label>Visualisation</label>
+        <select id="sel-visual"></select>
+      </div>
+      <div class="field">
+        <label>Replay gain</label>
+        <select id="sel-rgain"></select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Live audio filters</h2>
+    <p class="small muted">Applied to the running output straight away.</p>
+    <div class="keys" id="afilters"></div>
+    <div class="row" style="margin-top:8px">
+      <input type="text" id="afilter-raw" placeholder="raw filter chain, e.g. normvol:compressor" style="flex:1">
+      <button id="afilter-set">Apply</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Equalizer</h2>
+    <div class="row">
+      <button id="eq-enable">Enabled</button>
+      <select id="eq-preset"></select>
+      <label class="small"><input type="checkbox" id="eq-2pass"> 2 pass</label>
+      <button id="eq-flat">Flat</button>
+    </div>
+    <div class="field" style="margin-top:8px">
+      <label>Preamp <span class="val" id="preamp-val"></span></label>
+      <input type="range" id="preamp" min="-20" max="20" step="0.5">
+    </div>
+    <div class="eq" id="eqbands"></div>
+  </div>
+
+  <div class="card">
+    <h2>Audio filters &amp; visualisation</h2>
+    <div id="cfg-audio" class="grid"></div>
+  </div>
+</section>
+
+<!-- ================= SUBTITLES ================= -->
+<section id="tab-subs">
+  <div class="card">
+    <h2>Track</h2>
+    <div class="grid">
+      <div class="field">
+        <label>Subtitle track</label>
+        <div class="row">
+          <select id="sel-spu-es"></select>
+          <button class="sq" data-key="subtitle-track" title="Cycle">&#8635;</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Subtitle delay <span class="val" id="sdelay-val"></span></label>
+        <div class="row">
+          <button class="sq" data-key="subdelay-down">-50ms</button>
+          <input type="number" id="sdelay" step="0.05">
+          <button class="sq" data-key="subdelay-up">+50ms</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Size on screen <span class="val" id="sscale-val"></span></label>
+        <div class="row">
+          <button class="sq" data-key="subtitle-text-scale-down">A-</button>
+          <input type="range" id="sscale" min="25" max="500" step="5">
+          <button class="sq" data-key="subtitle-text-scale-up">A+</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Load a subtitle file</label>
+        <div class="row">
+          <input type="text" id="subpath" placeholder="C:\path\movie.srt or http://...">
+          <button id="subadd">Load</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Sync helper</label>
+        <div class="row tight">
+          <button data-key="subsync-markaudio">Mark audio</button>
+          <button data-key="subsync-marksub">Mark sub</button>
+          <button data-key="subsync-apply">Apply</button>
+          <button data-key="subsync-reset">Reset</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Position on screen</label>
+        <div class="row tight">
+          <button data-key="subpos-up">Up</button>
+          <button data-key="subpos-down">Down</button>
+          <button data-key="subtitle-toggle">Toggle</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Rendering</h2>
+    <p class="small muted">These are VLC preferences &mdash; they take effect on the next item played.</p>
+    <div id="cfg-subs" class="grid"></div>
+  </div>
+</section>
+
+<!-- ================= VIDEO ================= -->
+<section id="tab-video">
+  <div class="card">
+    <h2>Live output</h2>
+    <div class="grid">
+      <div class="field"><label>Video track</label><select id="sel-video-es"></select></div>
+      <div class="field"><label>Aspect ratio</label><select id="sel-aspect"></select></div>
+      <div class="field"><label>Crop</label><select id="sel-crop"></select></div>
+      <div class="field">
+        <label>Zoom <span class="val" id="zoom-val"></span></label>
+        <input type="range" id="zoom" min="0.25" max="4" step="0.05">
+      </div>
+      <div class="field">
+        <label>Deinterlace</label>
+        <div class="row">
+          <select id="sel-deint-on">
+            <option value="-1">Auto</option><option value="0">Off</option><option value="1">On</option>
+          </select>
+          <select id="sel-deint-mode"></select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Program</label><select id="sel-program"></select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Image adjust</h2>
+    <div class="row"><label class="small"><input type="checkbox" id="adjust-on"> Enable adjust filter</label></div>
+    <div id="adjust" class="grid"></div>
+  </div>
+
+  <div class="card">
+    <h2>Video preferences</h2>
+    <div id="cfg-video" class="grid"></div>
+  </div>
+</section>
+
+<!-- ================= PLAYLIST ================= -->
+<section id="tab-playlist">
+  <div class="card">
+    <h2>Add media</h2>
+    <div class="field">
+      <label>URL, stream or local path (one per line)</label>
+      <textarea id="add-uris" rows="3" placeholder="https://example.com/stream.m3u8&#10;D:\music\song.flac"></textarea>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <input type="text" id="add-opts" placeholder=":option=value:another-option" style="flex:1">
+      <button class="pri" id="add-play">Play now</button>
+      <button id="add-enq">Enqueue</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Playlist</h2>
+    <div class="row">
+      <input type="text" id="pl-search" placeholder="Filter..." style="flex:1">
+      <select id="pl-sort">
+        <option value="">Sort by...</option>
+        <option value="title">Title</option>
+        <option value="artist">Artist</option>
+        <option value="album">Album</option>
+        <option value="duration">Duration</option>
+        <option value="id">Id</option>
+        <option value="random">Shuffle</option>
+      </select>
+      <button id="pl-clear">Clear</button>
+    </div>
+    <div class="list" id="pl-list" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <h2>Media sources</h2>
+    <div class="keys" id="sd-list"></div>
+  </div>
+</section>
+
+<!-- ================= BROWSE ================= -->
+<section id="tab-browse">
+  <div class="card">
+    <div class="row">
+      <input type="text" id="br-path" placeholder="~" style="flex:1">
+      <button id="br-go">Open</button>
+      <button id="br-home">Home</button>
+      <button id="br-drives">Drives</button>
+    </div>
+    <div class="crumb" id="br-crumb"></div>
+    <div class="list" id="br-list"></div>
+  </div>
+</section>
+
+<!-- ================= HOTKEYS ================= -->
+<section id="tab-keys">
+  <div class="card">
+    <h2>VLC actions</h2>
+    <p class="small muted">Fires the same action as the matching keyboard shortcut in the player.</p>
+    <div class="keys" id="keygrid"></div>
+  </div>
+  <div class="card">
+    <h2>Custom</h2>
+    <div class="row">
+      <input type="text" id="key-custom" placeholder="e.g. aspect-ratio (without the key- prefix)" style="flex:1">
+      <button id="key-send">Fire</button>
+    </div>
+  </div>
+</section>
+
+<!-- ================= INFO ================= -->
+<section id="tab-info">
+  <div class="card"><h2>Media information</h2><div id="infobox"></div></div>
+  <div class="card"><h2>Statistics</h2><div id="statbox"></div></div>
+  <div class="card"><h2>Raw status</h2><pre class="small" id="rawbox" style="overflow:auto;max-height:40vh"></pre></div>
+</section>
+
+</main>
+<div id="toast"></div>
+<script src="mod.js"></script>
+</body>
+</html>

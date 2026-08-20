@@ -1,0 +1,285 @@
+<?vlc
+-- VLC Web UI Plus - extended JSON API endpoint
+local common        = require "common"
+local httprequests  = require "httprequests"
+
+local R    = {}
+local ERRS = {}
+local function fail(m) ERRS[#ERRS+1] = tostring(m) end
+
+-- pcall wrapper keeping the first return value
+local function try(f, ...)
+    local ok, a = pcall(f, ...)
+    if not ok then fail(a); return nil end
+    return a
+end
+
+local G = _G._GET or {}
+local function arg(n, d) local v = G[n]; if v == nil or v == "" then return d end return v end
+local function num(n, d) return tonumber(arg(n)) or d end
+
+local function object(which)
+    if which == "input"        then return vlc.object.input()
+    elseif which == "aout"     then return vlc.object.aout()
+    elseif which == "vout"     then return vlc.object.vout()
+    elseif which == "playlist" then return vlc.object.playlist()
+    elseif which == "libvlc"   then return vlc.object.libvlc() end
+    return nil
+end
+
+-- coerce a query string value into the lua type VLC expects
+local function coerce(v, t)
+    if t == "int"   then return math.floor(tonumber(v) or 0) end
+    if t == "float" then return common.us_tonumber(v) end
+    if t == "bool"  then return (v == "1" or v == "true" or v == "yes") end
+    return tostring(v)
+end
+
+-- {value,text} choice list for a variable, nil when unavailable
+local function choices(o, name)
+    if not o then return nil end
+    local ok, vals, texts = pcall(vlc.var.get_list, o, name)
+    if not ok or type(vals) ~= "table" then return nil end
+    local out = { _array = {} }
+    for i, v in ipairs(vals) do
+        out._array[#out._array+1] = { value = v, text = tostring((texts and texts[i]) or v) }
+    end
+    return out
+end
+
+local function varget(o, name)
+    if not o then return nil end
+    local ok, v = pcall(vlc.var.get, o, name)
+    if not ok then return nil end
+    return v
+end
+
+local function cfgget(name)
+    local ok, v = pcall(vlc.config.get, name)
+    if not ok then return nil end
+    return v
+end
+
+-- infer the wanted lua type from the value VLC currently holds
+local function typeof_current(cur, explicit)
+    if explicit then return explicit end
+    if type(cur) == "boolean" then return "bool" end
+    -- float is safe for int options too, VLC truncates on the way in
+    if type(cur) == "number" then return "float" end
+    return "string"
+end
+
+-- turn a plain path into a uri, leave real uris alone
+local function touri(u)
+    if not u or u == "" then return nil end
+    if string.match(u, "^%a[%w+.-]*://") then return u end
+    return vlc.strings.make_uri(u) or u
+end
+
+-- ---------------------------------------------------------------- commands
+local cmd = arg("cmd")
+
+-- stock httprequests commands keep working through this endpoint
+if G["command"] then try(httprequests.processcommands) end
+
+if cmd == "setvar" then
+    local o = object(arg("obj", "input"))
+    local name = arg("name")
+    if o then
+        local t = typeof_current(varget(o, name), G["type"])
+        try(vlc.var.set, o, name, coerce(arg("val"), t))
+    else
+        fail("object not available: " .. tostring(arg("obj", "input")))
+    end
+
+elseif cmd == "setconfig" then
+    local name = arg("name")
+    try(vlc.config.set, name, coerce(arg("val"), typeof_current(cfgget(name), G["type"])))
+
+elseif cmd == "setconfig_multi" then
+    -- names=a,b,c with v_<name>=value and optional t_<name>=type
+    for name in string.gmatch(arg("names", ""), "[^,]+") do
+        local t = typeof_current(cfgget(name), G["t_" .. name])
+        try(vlc.config.set, name, coerce(G["v_" .. name], t))
+    end
+
+elseif cmd == "key" then
+    -- common.hotkey returns false for unknown actions instead of raising
+    local name = "key-" .. tostring(arg("val"))
+    local ok, res = pcall(common.hotkey, name)
+    if not ok then fail(res)
+    elseif res ~= true then fail("unknown action: " .. name) end
+
+elseif cmd == "osd" then
+    try(vlc.osd.message, tostring(arg("val", "")), nil, arg("pos", "top-right"), num("dur", 3) * 1000000)
+
+elseif cmd == "seek" then
+    try(common.seek, arg("val"))
+
+elseif cmd == "volume" then
+    try(common.volume, arg("val"))
+
+elseif cmd == "aout_device" then
+    local a = vlc.object.aout()
+    if a then try(vlc.var.set, a, "device", tostring(arg("val")))
+    else fail("no audio output active") end
+
+elseif cmd == "eq_set" then
+    if G["enable"] then try(vlc.equalizer.enable, arg("enable") ~= "0") end
+    if G["preset"] then try(vlc.equalizer.setpreset, arg("preset")) end
+    if G["preamp"] then try(vlc.equalizer.preampset, common.us_tonumber(arg("preamp"))) end
+    for i = 0, 9 do
+        local b = G["b" .. i]
+        if b and b ~= "" then try(vlc.equalizer.equalizerset, i, common.us_tonumber(b)) end
+    end
+
+elseif cmd == "addsub" then
+    -- add_subtitle takes a plain path, add_subtitle_mrl takes a uri
+    local v = arg("val")
+    local auto = (arg("select", "1") ~= "0")
+    if not v then
+        fail("no subtitle given")
+    elseif string.match(v, "^%a[%w+.-]*://") then
+        try(vlc.input.add_subtitle_mrl, v, auto)
+    else
+        try(vlc.input.add_subtitle, v, auto)
+    end
+
+elseif cmd == "pl_add" then
+    local uris = G["uri"]
+    if type(uris) ~= "table" then uris = { uris } end
+    local opts = {}
+    for o in string.gmatch(arg("opts", ""), "[^:]+") do opts[#opts+1] = o end
+    local items = {}
+    for _, u in ipairs(uris) do
+        local uri = touri(u)
+        if uri then items[#items+1] = { path = uri, options = opts, name = arg("name") } end
+    end
+    if #items == 0 then
+        fail("no uri given")
+    elseif arg("play") == "1" then
+        try(vlc.playlist.add, items)
+    else
+        try(vlc.playlist.enqueue, items)
+    end
+
+elseif cmd == "pl_move" then
+    try(vlc.playlist.move, math.floor(num("id", -1)), math.floor(num("target", 0)))
+
+elseif cmd == "pl_delete_many" then
+    local ids = G["id"]
+    if type(ids) ~= "table" then ids = { ids } end
+    for _, i in ipairs(ids) do try(vlc.playlist.delete, math.floor(tonumber(i) or -1)) end
+
+elseif cmd == "sd_toggle" then
+    local v = arg("val")
+    if vlc.sd.is_loaded(v) then try(vlc.sd.remove, v) else try(vlc.sd.add, v) end
+end
+
+-- ---------------------------------------------------------------- payloads
+local want = {}
+for w in string.gmatch(arg("want", "status"), "[^,]+") do want[w] = true end
+
+local input, aout, vout = vlc.object.input(), vlc.object.aout(), vlc.object.vout()
+
+if want["status"] then
+    R.status = try(httprequests.getstatus, arg("info") == "1") or {}
+    local x = {}
+    x.hasinput = (input ~= nil)
+    x.hasaout  = (aout ~= nil)
+    x.hasvout  = (vout ~= nil)
+    x.audio_es  = varget(input, "audio-es")
+    x.video_es  = varget(input, "video-es")
+    x.spu_es    = varget(input, "spu-es")
+    x.program   = varget(input, "program")
+    x.title     = varget(input, "title")
+    x.chapter   = varget(input, "chapter")
+    -- subtitle text scale is held on the playlist object, not the input
+    x.sub_scale = varget(vlc.object.playlist(), "sub-text-scale")
+    x.record    = varget(input, "record")
+    x.can_seek  = varget(input, "can-seek")
+    x.can_pause = varget(input, "can-pause")
+    x.device    = varget(aout, "device")
+    x.stereo    = varget(aout, "stereo-mode")
+    x.mute      = varget(aout, "mute")
+    x.visual       = varget(aout, "visual")
+    x.audio_filter = varget(aout, "audio-filter")
+    x.replaygain   = varget(aout, "audio-replay-gain-mode")
+    x.crop      = varget(vout, "crop")
+    x.zoom      = varget(vout, "zoom")
+    x.deinterlace      = varget(vout, "deinterlace")
+    x.deinterlace_mode = varget(vout, "deinterlace-mode")
+    x.aspect       = varget(vout, "aspect-ratio")
+    x.sub_source   = varget(vout, "sub-source")
+    x.video_filter = varget(vout, "video-filter")
+    R.ext = x
+end
+
+if want["caps"] then
+    local c = {}
+    c.audio_tracks = choices(input, "audio-es")
+    c.video_tracks = choices(input, "video-es")
+    c.sub_tracks   = choices(input, "spu-es")
+    c.programs     = choices(input, "program")
+    c.titles       = choices(input, "title")
+    c.chapters     = choices(input, "chapter")
+    c.devices      = choices(aout, "device")
+    c.stereo_modes = choices(aout, "stereo-mode")
+    c.visual       = choices(aout, "visual")
+    c.replaygain   = choices(aout, "audio-replay-gain-mode")
+    c.zoom         = choices(vout, "zoom")
+    c.aspect       = choices(vout, "aspect-ratio")
+    c.crop         = choices(vout, "crop")
+    c.deinterlace_modes = choices(vout, "deinterlace-mode")
+    c.sd = { _array = {} }
+    local ok, names, longnames = pcall(vlc.sd.get_services_names)
+    if ok and type(names) == "table" then
+        for k, v in pairs(names) do
+            local id, label
+            if type(k) == "number" then id, label = v, (longnames and longnames[k]) or v
+            else id, label = k, v end
+            c.sd._array[#c.sd._array+1] = { value = id, text = tostring(label), loaded = vlc.sd.is_loaded(id) }
+        end
+    end
+    R.caps = c
+end
+
+if want["keys"] then
+    -- which hotkey actions this build knows, names given without the key- prefix
+    local k = {}
+    for n in string.gmatch(arg("names", ""), "[^,]+") do
+        local ok, id = pcall(vlc.misc.action_id, "key-" .. n)
+        k[n] = (ok and id ~= nil)
+    end
+    R.keys = k
+end
+
+if want["vars"] then
+    -- generic probe: names=a,b,c on obj=input|aout|vout|playlist|libvlc
+    local o = object(arg("obj", "input"))
+    local v = {}
+    for k in string.gmatch(arg("names", ""), "[^,]+") do
+        v[k] = { value = varget(o, k), choices = choices(o, k) }
+    end
+    R.vars = v
+end
+
+if want["config"] then
+    -- an unset string option reads back as nil, that is not the same as unknown
+    local cfg, unknown = {}, {}
+    for k in string.gmatch(arg("keys", ""), "[^,]+") do
+        local ok, v = pcall(vlc.config.get, k)
+        if ok then cfg[k] = (v == nil) and "" or v
+        else unknown[#unknown+1] = k end
+    end
+    R.config = cfg
+    R.config_unknown = { _array = unknown }
+end
+
+if want["playlist"] then R.playlist = try(httprequests.playlisttable) end
+if want["browse"]   then R.browse   = try(httprequests.getbrowsetable) end
+
+R.errors = { _array = ERRS }
+R.ok = (#ERRS == 0)
+httprequests.printTableAsJson(R)
+?>

@@ -1,0 +1,9 @@
+# local install marker written by install.bat
+.installed
+
+# backups of the user's own VLC tree - never publish these
+backup/
+
+# test leftovers
+vlc-test*.log
+*.srt
