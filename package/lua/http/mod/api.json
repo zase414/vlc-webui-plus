@@ -69,11 +69,71 @@ local function typeof_current(cur, explicit)
     return "string"
 end
 
+-- ---------------------------------------------------------------- paths
+-- VLC hands back a mix of "C:\", "C:/x" and "~", normalise to forward slashes
+local function normpath(p)
+    if not p or p == "" then return "" end
+    p = string.gsub(p, "\\", "/")
+    local unc = string.match(p, "^//[^/]") ~= nil
+    p = string.gsub(p, "//+", "/")
+    if unc then p = "/" .. p end
+    -- keep the slash only on roots: "/", "C:/", "//server/"
+    if #p > 1 and string.sub(p, -1) == "/" and not string.match(p, "^%a:/$") then
+        p = string.sub(p, 1, -2)
+    end
+    return p
+end
+
+local function isroot(p)
+    return p == "" or p == "/" or string.match(p, "^%a:/$") ~= nil
+end
+
+local function joinpath(dir, name)
+    if dir == "" then return name end
+    if string.sub(dir, -1) == "/" then return dir .. name end
+    return dir .. "/" .. name
+end
+
+local function parentof(p)
+    if isroot(p) then return "" end
+    local up = string.match(p, "^(.*)/[^/]+$")
+    if not up or up == "" then
+        -- "C:/Users" -> "C:/", "/usr" -> "/"
+        if string.match(p, "^%a:/[^/]+$") then return string.sub(p, 1, 3) end
+        return "/"
+    end
+    if string.match(up, "^%a:$") then return up .. "/" end
+    return up
+end
+
+local MEDIA_EXT = {
+    mp4=1, mkv=1, avi=1, mov=1, wmv=1, flv=1, webm=1, m4v=1, mpg=1, mpeg=1, ts=1, m2ts=1,
+    vob=1, ogv=1, rmvb=1, divx=1, ["3gp"]=1, mts=1,
+    mp3=1, flac=1, wav=1, ogg=1, oga=1, opus=1, m4a=1, aac=1, wma=1, ape=1, alac=1, aiff=1,
+    mid=1, midi=1, dsf=1, mka=1, ac3=1, dts=1,
+    jpg=1, jpeg=1, png=1, gif=1, bmp=1, webp=1, tiff=1,
+    srt=1, ass=1, ssa=1, sub=1, idx=1, vtt=1, sup=1,
+    m3u=1, m3u8=1, pls=1, xspf=1, cue=1, iso=1
+}
+
+-- make_uri mangles forward slashes on Windows, hand it native separators
+local function nativepath(p)
+    if string.match(p, "^%a:[/\\]") or string.match(p, "^[/\\][/\\]") then
+        return (string.gsub(p, "/", "\\"))
+    end
+    return p
+end
+
+-- a scheme needs two or more letters, so "C://x" is never mistaken for one
+local function isuri(u)
+    return string.match(u, "^%a[%w+.-]+://") ~= nil
+end
+
 -- turn a plain path into a uri, leave real uris alone
 local function touri(u)
     if not u or u == "" then return nil end
-    if string.match(u, "^%a[%w+.-]*://") then return u end
-    return vlc.strings.make_uri(u) or u
+    if isuri(u) then return u end
+    return vlc.strings.make_uri(nativepath(u)) or u
 end
 
 -- ---------------------------------------------------------------- commands
@@ -139,10 +199,10 @@ elseif cmd == "addsub" then
     local auto = (arg("select", "1") ~= "0")
     if not v then
         fail("no subtitle given")
-    elseif string.match(v, "^%a[%w+.-]*://") then
+    elseif isuri(v) then
         try(vlc.input.add_subtitle_mrl, v, auto)
     else
-        try(vlc.input.add_subtitle, v, auto)
+        try(vlc.input.add_subtitle, nativepath(v), auto)
     end
 
 elseif cmd == "pl_add" then
@@ -276,8 +336,225 @@ if want["config"] then
     R.config_unknown = { _array = unknown }
 end
 
+if want["now"] then
+    -- compact "what is actually playing" summary, plus config sanity warnings
+    local n = { warn = { _array = {} } }
+    local function warn(m) n.warn._array[#n.warn._array+1] = m end
+
+    -- info keys are translated by VLC, so match on the shape of the value instead
+    local function looks_channels(v)
+        local s = string.lower(v)
+        if string.match(s, "^%d%.%d$") then return true end
+        return string.match(s, "stereo") or string.match(s, "mono") or string.match(s, "dual")
+            or string.match(s, "surround") or string.match(s, "dolby")
+            or string.match(s, "%df%d?r") or string.match(s, "lfe") or false
+    end
+
+    -- VLC uses spaces in some info keys, normalise before looking anything up
+    local function norm(kv)
+        local t = {}
+        for k, v in pairs(kv) do t[(string.gsub(k, "%s", "_"))] = v end
+        return t
+    end
+
+    local item = input and vlc.input.item()
+    local info = item and item:info() or {}
+    local vcat, acat
+    for name, raw in pairs(info) do
+        if name ~= "meta" then
+            local kv = norm(raw)
+            -- only the audio stream reports decoded channels, only video has WxH
+            if kv["Decoded_channels"] ~= nil then
+                if not acat then acat = kv end
+            elseif not vcat then
+                for _, v in pairs(kv) do
+                    if string.match(tostring(v), "^%d+x%d+$") then vcat = kv; break end
+                end
+            end
+        end
+    end
+
+    if vcat then
+        local dims, fps = {}, nil
+        for k, v in pairs(vcat) do
+            v = tostring(v)
+            if string.match(v, "^%d+x%d+$") then dims[#dims+1] = v
+            elseif string.match(v, "^%d+%.?%d*$") and tonumber(v) and tonumber(v) >= 1
+                   and tonumber(v) <= 1000 and not fps then fps = v end
+        end
+        -- smallest frame wins: the other entry is the padded decoder buffer
+        table.sort(dims, function(a, b)
+            local aw, ah = string.match(a, "(%d+)x(%d+)")
+            local bw, bh = string.match(b, "(%d+)x(%d+)")
+            return (aw * ah) < (bw * bh)
+        end)
+        n.video = { res = dims[1], fps = fps }
+        if dims[2] and dims[2] ~= dims[1] then
+            local w1, h1 = string.match(dims[1], "(%d+)x(%d+)")
+            local w2, h2 = string.match(dims[2], "(%d+)x(%d+)")
+            -- ignore a few pixels of macroblock padding, report a real difference
+            if (w2 - w1) > 16 or (h2 - h1) > 16 then n.video.display = dims[2] end
+        end
+    end
+
+    if acat then
+        local a = { decoded = acat["Decoded_channels"] }
+        for k, v in pairs(acat) do
+            v = tostring(v)
+            if string.match(v, "%d+%s*Hz$") then a.rate = v
+            elseif string.match(v, "kb/s") then a.bitrate = v
+            elseif k ~= "Decoded_channels" and looks_channels(v) then a.channels = v end
+        end
+        a.channels = a.channels or a.decoded
+        n.audio = a
+    end
+
+    -- name of the selected track, taken from the choice list
+    local function label(o, var)
+        local cur = varget(o, var)
+        if cur == nil then return nil, nil end
+        local ok, vals, texts = pcall(vlc.var.get_list, o, var)
+        if ok and type(vals) == "table" then
+            for i, v in ipairs(vals) do
+                if v == cur then return tostring((texts and texts[i]) or v), cur end
+            end
+        end
+        return nil, cur
+    end
+
+    n.atrack, n.audio_es = label(input, "audio-es")
+    n.strack, n.spu_es   = label(input, "spu-es")
+    n.subs_on = (n.spu_es ~= nil and n.spu_es >= 0)
+    n.stereo_text, n.stereo = label(aout, "stereo-mode")
+    n.aspect  = varget(vout, "aspect-ratio")
+    n.crop    = varget(vout, "crop")
+    n.filters = varget(aout, "audio-filter")
+    n.force_dolby = cfgget("force-dolby-surround")
+    n.spdif = cfgget("spdif")
+
+    -- how many channels a layout string carries, 0 when unreadable
+    local function chcount(s)
+        s = string.lower(tostring(s or ""))
+        if s == "" then return 0 end
+        if string.find(s, "7.1", 1, true) or string.find(s, "3f4r", 1, true) then return 8 end
+        if string.find(s, "6.1", 1, true) then return 7 end
+        if string.find(s, "5.1", 1, true) or string.find(s, "3f2r", 1, true) then return 6 end
+        if string.find(s, "5.0", 1, true) or string.find(s, "3f2m", 1, true) then return 5 end
+        if string.find(s, "4.0", 1, true) or string.find(s, "quad", 1, true) then return 4 end
+        if string.find(s, "3.0", 1, true) then return 3 end
+        if string.find(s, "stereo", 1, true) or string.find(s, "2.0", 1, true) then return 2 end
+        if string.find(s, "mono", 1, true) or string.find(s, "1.0", 1, true) then return 1 end
+        return 0
+    end
+
+    local src = chcount(n.audio and n.audio.channels)
+    local dec = chcount(n.audio and n.audio.decoded)
+    n.src_channels = src
+    n.dec_channels = dec
+    n.surround = (src >= 5)
+
+    local FORCED = { [1]="stereo", [2]="reversed stereo", [3]="left only", [4]="right only",
+                     [5]="Dolby surround", [6]="mono", [7]="headphones" }
+    local forced = FORCED[n.stereo]
+    n.downmixed = (src >= 5 and dec > 0 and dec < src)
+
+    if n.downmixed then
+        warn(n.audio.channels .. " audio is reaching the speakers as " .. n.audio.decoded ..
+             " — VLC is downmixing it.")
+    end
+    if src >= 5 and forced and n.stereo ~= 5 and n.stereo ~= 7 then
+        warn("Stereo mode is forced to " .. forced .. ". Set it to Unset on the Audio tab for surround.")
+    end
+    local flt = string.lower(tostring(n.filters or ""))
+    if src >= 5 and string.find(flt, "mono", 1, true) then
+        warn("The 'mono' audio filter is loaded, surround is collapsed to one channel.")
+    end
+    if src >= 5 and string.find(flt, "headphone", 1, true) then
+        warn("Headphone virtualisation is on. Right for headphones, wrong for speakers.")
+    end
+    if src > 0 and src <= 2 and n.stereo == 5 then
+        warn("Dolby surround decoding is forced on a " .. (src == 1 and "mono" or "stereo") .. " track.")
+    end
+    if src > 0 and src <= 2 and tonumber(n.force_dolby or 0) == 1 then
+        warn("force-dolby-surround is On in preferences but this track is not surround.")
+    end
+    if input ~= nil and aout == nil then
+        warn("No audio output is open — nothing is being sent to the speakers.")
+    end
+    if n.spdif == true and src >= 5 then
+        warn("S/PDIF passthrough is on, so your receiver picks the surround mode, not VLC.")
+    end
+
+    R.now = n
+end
+
 if want["playlist"] then R.playlist = try(httprequests.playlisttable) end
-if want["browse"]   then R.browse   = try(httprequests.getbrowsetable) end
+
+if want["browse"] then
+    -- read raw: an empty path means "list the drives", not "use the default"
+    local p = G["path"]
+    if p == nil then p = G["dir"] end
+    if p == nil then p = "~" end
+    if p == "~" then p = vlc.config.homedir() end
+    p = normpath(p)
+
+    local b = { path = p, parent = parentof(p), entries = { _array = {} }, crumbs = { _array = {} } }
+
+    -- breadcrumb, "" is the drive/root listing
+    b.crumbs._array[1] = { name = "Computer", path = "" }
+    if p ~= "" then
+        local acc = ""
+        local first = true
+        for part in string.gmatch(p, "[^/]+") do
+            if first and string.match(part, "^%a:$") then acc = part .. "/"
+            elseif first then acc = "/" .. part
+            else acc = joinpath(acc, part) end
+            first = false
+            b.crumbs._array[#b.crumbs._array+1] = { name = part, path = acc }
+        end
+        if string.sub(p, 1, 1) == "/" and #b.crumbs._array == 1 then
+            b.crumbs._array[2] = { name = "/", path = "/" }
+        end
+    end
+
+    local mediaonly = (arg("show") == "media")
+    local listdir = p
+    if p ~= "" and string.sub(listdir, -1) ~= "/" then listdir = listdir .. "/" end
+
+    local ok, d = pcall(vlc.net.opendir, listdir)
+    if not ok or type(d) ~= "table" then
+        fail("cannot open: " .. p)
+        d = {}
+    end
+    table.sort(d)
+
+    for _, f in ipairs(d) do
+        if f ~= "." and f ~= ".." and not string.match(f, "^%.") then
+            local child = normpath(joinpath(p, f))
+            local s = vlc.net.stat(child)
+            local kind = s and s.type or "unknown"
+            if p == "" then kind = "dir" end   -- drive letters do not stat
+            local ext = string.lower(string.match(f, "%.([^%.]+)$") or "")
+            local keep = (kind == "dir") or (not mediaonly) or MEDIA_EXT[ext]
+            if keep then
+                local e = { name = f, path = child, type = kind, ext = ext }
+                if p == "" then e.name = (string.gsub(f, "[\\/]+$", "")) end
+                if s then e.size = s.size; e.mtime = s.modification_time end
+                if kind ~= "dir" then e.uri = vlc.strings.make_uri(nativepath(child)) end
+                b.entries._array[#b.entries._array+1] = e
+            end
+        end
+    end
+
+    -- directories first, then plain alphabetical
+    table.sort(b.entries._array, function(x, y)
+        local dx, dy = (x.type == "dir"), (y.type == "dir")
+        if dx ~= dy then return dx end
+        return string.lower(x.name) < string.lower(y.name)
+    end)
+
+    R.browse = b
+end
 
 R.errors = { _array = ERRS }
 R.ok = (#ERRS == 0)

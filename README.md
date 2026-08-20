@@ -59,8 +59,32 @@ goes wrong, including damage caused by something other than this mod.
 ### Now Playing
 Artwork, title and metadata, seek bar, transport controls, frame step,
 fullscreen, snapshot, recording, volume, playback speed, random / loop / repeat,
-title and chapter selection, and an on-screen-message box that prints text over
-the video.
+and title and chapter selection.
+
+Under the title sits a **stream summary**: resolution, frame rate, aspect ratio,
+channel layout, sample rate, the name of the selected audio track, and whether
+subtitles are on. Anything that looks misconfigured is called out underneath in
+plain words, for example:
+
+* surround audio that is being downmixed on the way to the speakers
+* a stereo mode forced to mono, left, right or reversed
+* the `mono` or `headphone` audio filter loaded on a surround track
+* Dolby surround decoding forced on a stereo or mono track
+* no audio output open at all
+* S/PDIF passthrough on, where the receiver, not VLC, picks the mode
+
+The channel chip shows both sides when they differ, so `5.1 → Stereo` tells you
+at a glance that the movie is surround but your speakers are not getting it.
+
+The clock button next to the transport controls opens **Autostart**: play at a
+clock time (`hh:mm`) or after a countdown (`mm:ss`), optionally announcing it on
+screen ten seconds before, and optionally restarting the playlist, skipping to
+the next item, or going fullscreen when it fires. The timer runs in the browser
+tab and is stored there, so it survives a reload but not closing the page.
+
+Below that sits a read-only view of the queue: it shows what is playing and what
+is coming, dims what has already played, and scrolls to the current item.
+Clicking a row jumps to it; reordering and deleting live on the Playlist tab.
 
 ### Audio
 * Audio track selection
@@ -84,6 +108,8 @@ the video.
 * Load a subtitle file from a path or URL
 * Sync helper (mark audio, mark subtitle, apply, reset)
 * Move subtitles up / down
+* On-screen messages: type text, pick one of nine screen positions and a
+  duration, and it is drawn over the video
 * Rendering preferences: autodetect and fuzziness, preferred languages, vertical
   offset, frame rate, text encoding, alignment, formatting tags, font, absolute
   and relative size, bold, and colour + opacity for text, outline, shadow and
@@ -98,15 +124,34 @@ the video.
   folder, format, prefix and numbering
 
 ### Playlist
-Add several URLs or local paths at once with per-item options, play now or
-enqueue, click to play, reorder, delete, clear, filter, sort by title / artist /
-album / duration / id / shuffle, and toggle any media source (UPnP, SAP,
-podcasts, Icecast, Jamendo, discs, media folders...).
+Add several URLs or local paths at once, play now or enqueue, click to play,
+reorder, delete, clear, filter, sort by title / artist / album / duration / id /
+shuffle, and toggle any media source (UPnP, SAP, podcasts, Icecast, Jamendo,
+discs, media folders...).
+
+VLC's playlist root actually holds two nodes — the playlist and the media
+library — so they are shown as separate groups, and the library is hidden behind
+a checkbox rather than silently mixed into the queue.
+
+**Per-item options** are set on the add form and apply to everything you queue,
+whether from this tab or from Browse:
+
+| Control | VLC option | What it does |
+| --- | --- | --- |
+| Gain | `:gain=` | per-item volume, independent of the master volume |
+| Still image duration | `:image-duration=` | how long a picture stays on screen |
+| Start / stop time | `:start-time=` / `:stop-time=` | play only a slice of the item |
+| Extra options | anything | free text, colon separated |
+
+The form previews the exact option string before you commit it.
 
 ### Browse
-Walk the file system from VLC's side, including a drive list, and play, enqueue
-or attach any file as a subtitle.
-
+A proper file picker: a clickable breadcrumb, a parent button, home and drives
+shortcuts, folders sorted before files, file sizes, per-type icons, and an
+optional *media only* filter that hides anything that is not a media, subtitle
+or playlist file. Click a folder to open it, a file to play it, or use the
+per-row *play* / *queue* / *as sub* actions. Typing a raw path is still there
+behind the text button. Paths are normalised, so no more `C:\/Desktop`.
 ### Hotkeys
 Every VLC action as a button — navigation, disc menu, titles, chapters, crop
 edges, 360° field of view, zoom presets, programs and more. The grid hides
@@ -126,11 +171,13 @@ stock `?command=` still works. On top of that:
 | Parameter | Meaning |
 | --- | --- |
 | `want=` | comma list of payloads: `status`, `caps`, `playlist`, `browse`, `config`, `vars`, `keys` |
+| `want=browse` | `path=` (empty lists drives, `~` is home), `show=media` to filter |
+| `want=now` | stream summary: video res/fps, audio channels source vs decoded, selected track names, and a `warn` array of misconfigurations |
 | `cmd=setvar` | `obj=input\|aout\|vout\|playlist\|libvlc`, `name=`, `val=`, optional `type=int\|float\|bool\|string` |
 | `cmd=setconfig` | `name=`, `val=` — any VLC preference |
 | `cmd=setconfig_multi` | `names=a,b,c` with `v_<name>=` per key |
 | `cmd=key` | `val=` a hotkey action without the `key-` prefix |
-| `cmd=osd` | `val=` text, `pos=`, `dur=` seconds |
+| `cmd=osd` | `val=` text, `pos=` one of top-left..bottom-right, `dur=` seconds |
 | `cmd=eq_set` | `enable=`, `preset=`, `preamp=`, `b0..b9=` |
 | `cmd=addsub` | `val=` path or URL, `select=0` to load without selecting |
 | `cmd=pl_add` | repeatable `uri=`, `opts=` colon separated, `play=1` to play now |
@@ -152,6 +199,8 @@ Two payloads are worth knowing about when extending this:
   to discover what a given VLC build exposes.
 * `want=keys&names=a,b,c` reports which hotkey actions exist, without firing
   them.
+* `want=browse&path=...` returns a normalised path, its parent, a breadcrumb
+  array and the sorted entries, each with type, size and a ready-made uri.
 
 ## Notes and limitations
 
@@ -163,10 +212,31 @@ Two payloads are worth knowing about when extending this:
   to the next item played, not the one currently on screen. Everything on the
   live cards applies immediately.
 * Preferences changed here are not written to `vlcrc`; they last until VLC exits.
+* Info keys from VLC are translated to the player language, so the stream
+  summary matches on the shape of the values rather than on English key names.
+* The autostart timer lives in the browser tab, not in VLC. Closing the page
+  cancels it; reloading does not.
 * `sub-text-scale` lives on the playlist object rather than the input in VLC
   3.x, which is why the size slider keeps working between items.
+* Per-item options (gain, image duration, start/stop) can only be set when an
+  item is added. VLC 3.x offers no way to change the options of a playlist entry
+  that already exists, so to change them you re-add the item.
+* `vlc.strings.make_uri` mangles Windows paths given with forward slashes, so
+  paths are converted back to backslashes before a uri is built.
 
 ## Licence
 
 GPL-2.0-or-later, matching VLC's own Lua interface that this builds on. See
 [LICENSE](LICENSE).
+
+## Third-party assets
+
+Icons are [Phosphor Icons](https://phosphoricons.com/) (regular weight),
+Copyright (c) 2023 Phosphor Icons, used under the MIT licence. The full notice
+travels with the package in [LICENSE-phosphor.txt](LICENSE-phosphor.txt) and in
+the installed `lua/http/mod/` folder. MIT is GPL-compatible, so redistributing
+them inside this GPL-2.0-or-later package is fine as long as that notice stays
+with them.
+
+They are inlined as an SVG sprite in `index.html` — no CDN, no network access,
+so the interface works fully offline.

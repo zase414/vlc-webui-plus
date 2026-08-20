@@ -15,6 +15,46 @@ function el(tag, cls, txt) {
   if (txt !== undefined) e.textContent = txt;
   return e;
 }
+var SVGNS = "http://www.w3.org/2000/svg";
+function svgIcon(name) {
+  var s = document.createElementNS(SVGNS, "svg");
+  s.setAttribute("class", "ic");
+  s.setAttribute("viewBox", "0 0 256 256");
+  s.setAttribute("aria-hidden", "true");
+  var u = document.createElementNS(SVGNS, "use");
+  u.setAttribute("href", "#i-" + name);
+  s.appendChild(u);
+  return s;
+}
+/* prepend an icon to every [data-ic] element that has not got one yet */
+function applyIcons(root) {
+  var list = (root || document).querySelectorAll("[data-ic]");
+  Array.prototype.forEach.call(list, function (e) {
+    if (e._iced) return;
+    e._iced = true;
+    var hadText = !!e.textContent.trim();
+    e.insertBefore(svgIcon(e.dataset.ic), e.firstChild);
+    if (!hadText) e.classList.add("icon-only");
+  });
+}
+function setIcon(e, name) {
+  if (!e) return;
+  var u = e.querySelector("svg.ic use");
+  if (u) u.setAttribute("href", "#i-" + name);
+  else { e.insertBefore(svgIcon(name), e.firstChild); e._iced = true; }
+}
+
+/* swap a button label without eating the icon that sits next to it */
+function setLabel(e, txt) {
+  if (!e) return;
+  Array.prototype.slice.call(e.childNodes).forEach(function (n) {
+    if (n.nodeType === 3) e.removeChild(n);
+  });
+  var s = e.querySelector(".lbl");
+  if (!s) { s = el("span", "lbl"); e.appendChild(s); }
+  s.textContent = txt;
+}
+
 function qs(o) {
   var p = [];
   Object.keys(o).forEach(function (k) {
@@ -38,6 +78,7 @@ function toast(msg, bad) {
 function api(params) {
   return fetch(API + "?" + qs(params), { credentials: "same-origin" })
     .then(function (r) {
+      if (r.status === 401) throw new Error("Not authorised — reload the page and enter the Lua HTTP password");
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.text();
     })
@@ -377,8 +418,14 @@ function initNow() {
 
   $("sel-title").addEventListener("change", function () { setvar("input", "title", this.value, "int"); });
   $("sel-chapter").addEventListener("change", function () { setvar("input", "chapter", this.value, "int"); });
-  $("osd-send").addEventListener("click", function () {
-    act({ cmd: "osd", val: $("osd-text").value }).then(function () { toast("shown on screen"); });
+
+  // read-only queue: click to jump to an item, nothing else
+  $("np-list").addEventListener("click", function (e) {
+    var row = e.target.closest(".item[data-plid]");
+    if (row) cmd("pl_play", { id: row.dataset.plid });
+  });
+  $("np-plgoto").addEventListener("click", function () {
+    document.querySelector('#tabs button[data-tab="playlist"]').click();
   });
 }
 
@@ -441,6 +488,7 @@ function initAudio() {
     box.appendChild(b);
   });
   $("afilter-set").addEventListener("click", function () { applyFilters($("afilter-raw").value); });
+  applyIcons(box);
 
   buildCfg("cfg-audio", CFG.audio);
 }
@@ -461,6 +509,14 @@ function initSubs() {
     var v = $("subpath").value;
     if (v) act({ cmd: "addsub", val: v }).then(function () { toast("subtitle loaded"); });
   });
+  var send = function () {
+    var v = $("osd-text").value;
+    if (!v) { toast("type something first", true); return; }
+    act({ cmd: "osd", val: v, pos: $("osd-pos").value, dur: $("osd-dur").value })
+      .then(function () { toast("shown on screen"); });
+  };
+  $("osd-send").addEventListener("click", send);
+  $("osd-text").addEventListener("keydown", function (e) { if (e.key === "Enter") send(); });
   buildCfg("cfg-subs", CFG.subs);
 }
 
@@ -506,12 +562,18 @@ function initPlaylist() {
   }
   function add(play) {
     var uris = collect();
-    if (!uris.length) return toast("nothing to add", true);
-    act({ cmd: "pl_add", uri: uris, opts: $("add-opts").value, play: play ? "1" : "0" })
-      .then(function () { toast(uris.length + " item(s) added"); $("add-uris").value = ""; loadPlaylist(); });
+    addMedia(uris, play).then(function () { $("add-uris").value = ""; });
   }
   $("add-play").addEventListener("click", function () { add(true); });
   $("add-enq").addEventListener("click", function () { add(false); });
+  ["add-gain", "add-imgdur", "add-start", "add-stop", "add-opts"].forEach(function (id) {
+    $(id).addEventListener("input", refreshOptPreview);
+  });
+  $("add-imgdur-def").addEventListener("click", function () {
+    $("add-imgdur").value = ""; refreshOptPreview();
+  });
+  $("pl-showlib").addEventListener("change", renderPlaylist);
+  refreshOptPreview();
 
   $("pl-clear").addEventListener("click", function () {
     if (confirm("Clear the whole playlist?")) cmd("pl_empty").then(loadPlaylist);
@@ -541,6 +603,18 @@ function initBrowse() {
   $("br-path").addEventListener("keydown", function (e) { if (e.key === "Enter") browse(this.value || "~"); });
   $("br-home").addEventListener("click", function () { browse("~"); });
   $("br-drives").addEventListener("click", function () { browse(""); });
+  $("br-up").addEventListener("click", function () { browse(brParent); });
+  $("br-media").addEventListener("change", function () { browse(brDir); });
+  $("br-edit").addEventListener("click", function () {
+    var r = $("br-editrow");
+    r.classList.toggle("hidden");
+    if (!r.classList.contains("hidden")) $("br-path").focus();
+  });
+
+  $("br-crumbs").addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-crumb]");
+    if (b) browse(b.dataset.crumb);
+  });
 
   $("br-list").addEventListener("click", function (e) {
     var b = e.target.closest("button[data-path]");
@@ -548,16 +622,48 @@ function initBrowse() {
     if (b) {
       e.stopPropagation();
       var p = b.dataset.path;
-      if (b.dataset.act === "play") act({ cmd: "pl_add", uri: p, play: "1" }).then(function () { toast("playing"); });
-      if (b.dataset.act === "enq")  act({ cmd: "pl_add", uri: p }).then(function () { toast("enqueued"); });
-      if (b.dataset.act === "sub")  act({ cmd: "addsub", val: p }).then(function () { toast("subtitle loaded"); });
+      if (b.dataset.act === "play") addMedia([p], true);
+      if (b.dataset.act === "enq")  addMedia([p], false);
+      if (b.dataset.act === "sub")  act({ cmd: "addsub", val: b.dataset.raw || p })
+        .then(function () { toast("subtitle loaded"); });
       return;
     }
     if (row) {
       if (row.dataset.dir) browse(row.dataset.dir);
-      else act({ cmd: "pl_add", uri: row.dataset.file, play: "1" }).then(function () { toast("playing"); });
+      else addMedia([row.dataset.file], true);
     }
   });
+}
+
+/* per-item VLC options built from the Playlist tab's add form */
+function addOptions() {
+  var o = [];
+  var gain = parseFloat($("add-gain").value);
+  if (!isNaN(gain) && Math.abs(gain - 1) > 0.001) o.push("gain=" + gain);
+  var dur = $("add-imgdur").value;
+  if (dur !== "") o.push("image-duration=" + dur);
+  var st = $("add-start").value;
+  if (st !== "") o.push("start-time=" + st);
+  var sp = $("add-stop").value;
+  if (sp !== "") o.push("stop-time=" + sp);
+  ($("add-opts").value || "").split(":").forEach(function (x) {
+    x = x.trim();
+    if (x) o.push(x);
+  });
+  return o.join(":");
+}
+function refreshOptPreview() {
+  var o = addOptions();
+  $("add-gain-val").textContent = (+$("add-gain").value).toFixed(2) + "x";
+  $("add-preview").textContent = o ? "applied: :" + o.split(":").join(" :") : "no extra options";
+}
+function addMedia(uris, play) {
+  if (!uris.length) { toast("nothing to add", true); return Promise.resolve(); }
+  return act({ cmd: "pl_add", uri: uris, opts: addOptions(), play: play ? "1" : "0" })
+    .then(function () {
+      toast((play ? "playing " : "queued ") + uris.length + " item(s)");
+      loadPlaylist();
+    });
 }
 
 function initKeys() {
@@ -568,6 +674,8 @@ function initKeys() {
     b.title = "key-" + k[0];
     g.appendChild(b);
   });
+  applyIcons(g);
+
   $("key-send").addEventListener("click", function () {
     var v = $("key-custom").value.trim();
     if (v) key(v).then(function () { toast("fired key-" + v); });
@@ -583,35 +691,74 @@ function initKeys() {
 }
 
 /* ------------------------------------------------------------ browse */
-var brDir = "~";
+var brDir = "~", brParent = "";
+function fmtSize(n) {
+  if (!n && n !== 0) return "";
+  var u = ["B", "KB", "MB", "GB", "TB"], i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + " " + u[i];
+}
 function browse(dir) {
-  brDir = dir;
-  $("br-path").value = dir;
-  api({ want: "browse", dir: dir }).then(function (d) {
-    setConn(true);
-    var list = $("br-list");
-    list.innerHTML = "";
-    var items = arr(d.browse && d.browse.element);
-    $("br-crumb").textContent = dir === "" ? "Drives" : dir;
-    if (!items.length) list.appendChild(el("div", "item muted", "empty or not readable"));
-    items.forEach(function (it) {
-      var isDir = it.type === "dir";
-      var row = el("div", "item");
-      row.appendChild(el("span", "ico", isDir ? "\u{1F4C1}" : "\u{1F4C4}"));
-      row.appendChild(el("span", "name", it.name));
-      if (isDir) {
-        row.dataset.dir = it.path;
-      } else {
-        row.dataset.file = it.uri || it.path;
-        ["play", "enq", "sub"].forEach(function (a) {
-          var b = el("button", "lnk", a === "play" ? "play" : (a === "enq" ? "queue" : "as sub"));
-          b.dataset.act = a; b.dataset.path = it.uri || it.path;
-          row.appendChild(b);
-        });
+  return api({ want: "browse", path: dir, show: $("br-media").checked ? "media" : "all" })
+    .then(function (d) {
+      setConn(true);
+      var b = d.browse || {};
+      brDir = b.path !== undefined ? b.path : dir;
+      brParent = b.parent || "";
+      $("br-path").value = brDir;
+      $("br-up").disabled = !brParent && brDir === "";
+
+      // breadcrumb
+      var cr = $("br-crumbs");
+      cr.innerHTML = "";
+      var crumbs = arr(b.crumbs);
+      crumbs.forEach(function (c, i) {
+        if (i) {
+          var sep = el("span", "sep");
+          sep.dataset.ic = "caret-right";
+          cr.appendChild(sep);
+        }
+        var btn = el("button", i === crumbs.length - 1 ? "last" : null, c.name);
+        btn.dataset.crumb = c.path;
+        cr.appendChild(btn);
+      });
+      applyIcons(cr);
+
+      // entries
+      var list = $("br-list");
+      list.innerHTML = "";
+      var items = arr(b.entries);
+      if (!items.length) {
+        list.appendChild(el("div", "item muted", "empty, or VLC cannot read this folder"));
+        return;
       }
-      list.appendChild(row);
+      items.forEach(function (it) {
+        var isDir = it.type === "dir";
+        var row = el("div", "item");
+        var ico = el("span", "ico");
+        ico.dataset.ic = isDir ? "folder" : iconFor({ uri: it.name });
+        row.appendChild(ico);
+        var n = el("span", "name", it.name);
+        n.title = it.path;
+        row.appendChild(n);
+        if (isDir) {
+          row.dataset.dir = it.path;
+        } else {
+          row.dataset.file = it.uri || it.path;
+          row.appendChild(el("span", "meta2", fmtSize(it.size)));
+          [["play", "play", "play"], ["enq", "queue", "plus"], ["sub", "as sub", "subtitles"]]
+            .forEach(function (a) {
+              var btn = el("button", "lnk", a[1]);
+              btn.dataset.act = a[0];
+              btn.dataset.path = it.uri || it.path;
+              btn.dataset.raw = it.path;
+              row.appendChild(btn);
+            });
+        }
+        list.appendChild(row);
+      });
+      applyIcons(list);
     });
-  });
 }
 
 /* ------------------------------------------------------------ playlist */
@@ -620,6 +767,7 @@ function loadPlaylist() {
     setConn(true);
     plCache = d.playlist;
     renderPlaylist();
+    renderMini();
   });
 }
 function flatten(node, out) {
@@ -629,34 +777,290 @@ function flatten(node, out) {
   else if (node.type === "leaf") out.push(node);
   return out;
 }
-function renderPlaylist() {
-  var list = $("pl-list");
-  var items = flatten(plCache, []);
-  var f = ($("pl-search").value || "").toLowerCase();
-  if (f) items = items.filter(function (i) { return (i.name || "").toLowerCase().indexOf(f) >= 0; });
-  list.innerHTML = "";
-  if (!items.length) { list.appendChild(el("div", "item muted", "playlist is empty")); return; }
-  items.forEach(function (it, idx) {
-    var row = el("div", "item" + (it.current ? " cur" : ""));
-    row.dataset.plid = it.id;
-    row.appendChild(el("span", "ico", it.current ? "▶" : ""));
-    var n = el("span", "name", it.name || it.uri);
-    n.title = it.uri || "";
-    row.appendChild(n);
-    row.appendChild(el("span", "dur", it.duration > 0 ? fmt(it.duration) : ""));
-    [["up", "▲"], ["down", "▼"], ["del", "✕"]].forEach(function (a) {
-      var b = el("button", "lnk", a[1]);
-      b.dataset.act = a[0]; b.dataset.plid = it.id; b.dataset.idx = idx;
+/* VLC's root holds two nodes: the real playlist and the media library */
+function plGroups() {
+  var kids = arr(plCache && plCache.children);
+  if (!kids.length) return [{ name: "Playlist", items: flatten(plCache, []) }];
+  return kids.map(function (n) {
+    return { name: n.name || "Playlist", items: flatten(n, []) };
+  });
+}
+function isLibrary(name) { return /libr|knihov|biblio|mediat/i.test(name || ""); }
+
+function iconFor(it) {
+  var e = (it.uri || it.name || "").toLowerCase().replace(/[?#].*$/, "");
+  if (/\.(mp3|flac|wav|ogg|oga|opus|m4a|aac|wma|ape|mka|ac3|dts)$/.test(e)) return "file-audio";
+  if (/\.(jpg|jpeg|png|gif|bmp|webp|tiff)$/.test(e)) return "image";
+  if (/^(https?|rtsp|rtmp|mms|udp|rtp):/.test(e)) return "hard-drives";
+  return "file-video";
+}
+
+function plRow(it, idx, readonly) {
+  var row = el("div", "item" + (it.current ? " cur" : ""));
+  row.dataset.plid = it.id;
+  var ico = el("span", "ico");
+  ico.dataset.ic = it.current ? "play" : iconFor(it);
+  row.appendChild(ico);
+  var n = el("span", "name", it.name || it.uri);
+  n.title = it.uri || "";
+  row.appendChild(n);
+  row.appendChild(el("span", "dur", it.duration > 0 ? fmt(it.duration) : ""));
+  if (!readonly) {
+    [["up", "caret-up"], ["down", "caret-down"], ["del", "x"]].forEach(function (a) {
+      var b = el("button", "lnk");
+      b.dataset.ic = a[1]; b.dataset.act = a[0]; b.dataset.plid = it.id; b.dataset.idx = idx;
       row.appendChild(b);
     });
+  }
+  return row;
+}
+
+function renderPlaylist() {
+  var list = $("pl-list");
+  var f = ($("pl-search").value || "").toLowerCase();
+  var showlib = $("pl-showlib").checked;
+  list.innerHTML = "";
+  var any = false;
+  plGroups().forEach(function (g) {
+    if (!showlib && isLibrary(g.name)) return;
+    var items = f ? g.items.filter(function (i) {
+      return (i.name || "").toLowerCase().indexOf(f) >= 0;
+    }) : g.items;
+    if (!items.length) return;
+    any = true;
+    list.appendChild(el("div", "grouphdr", g.name + " — " + items.length));
+    items.forEach(function (it, idx) { list.appendChild(plRow(it, idx, false)); });
+  });
+  if (!any) list.appendChild(el("div", "item muted", f ? "nothing matches" : "playlist is empty"));
+  applyIcons(list);
+}
+
+/* read-only queue shown on the Now Playing tab */
+function renderMini() {
+  var list = $("np-list");
+  if (!list) return;
+  var items = [];
+  plGroups().forEach(function (g) { if (!isLibrary(g.name)) items = items.concat(g.items); });
+  list.innerHTML = "";
+  $("np-plcount").textContent = items.length ? items.length + " item(s)" : "";
+  if (!items.length) { list.appendChild(el("div", "item muted", "playlist is empty")); return; }
+  var cur = items.findIndex(function (i) { return i.current; });
+  items.forEach(function (it, idx) {
+    var row = plRow(it, idx, true);
+    if (cur >= 0 && idx < cur) row.classList.add("past");
     list.appendChild(row);
   });
+  applyIcons(list);
+  var c = list.querySelector(".item.cur");
+  if (c && !list._scrolled) { list.scrollTop = Math.max(0, c.offsetTop - 60); list._scrolled = true; }
+}
+
+/* ------------------------------------------------------------ stream summary */
+var N = {};
+
+function chip(icon, label, value, cls) {
+  var c = el("span", "chip" + (cls ? " " + cls : ""));
+  var i = el("span"); i.dataset.ic = icon; c.appendChild(i);
+  c.appendChild(el("b", null, value));
+  c.title = label + ": " + value;
+  return c;
+}
+
+/* how VLC names the channel layout is not stable, keep the raw string */
+function renderNowInfo() {
+  var box = $("np-chips");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!X.hasinput) { $("np-warn").classList.add("hidden"); return; }
+
+  var v = N.video || {}, a = N.audio || {};
+  if (v.res) {
+    var r = String(v.res);
+    if (v.display && v.display !== v.res) r += " \u2192 " + v.display;
+    box.appendChild(chip("monitor-play", "Resolution", r));
+  }
+  if (v.fps) box.appendChild(chip("gauge", "Frame rate", String(v.fps)));
+  var ar = X.aspect || N.aspect;
+  box.appendChild(chip("crop", "Aspect ratio", ar ? ar : "source default"));
+
+  if (a.channels) {
+    var ch = a.channels;
+    if (a.decoded && a.decoded !== a.channels) ch += " \u2192 " + a.decoded;
+    box.appendChild(chip("waveform", "Audio channels", ch,
+      N.downmixed ? "bad" : (N.surround ? "good" : "")));
+  }
+  if (a.rate) box.appendChild(chip("speaker-high", "Sample rate", String(a.rate)));
+  if (N.atrack) box.appendChild(chip("music-note", "Audio track", N.atrack));
+  box.appendChild(chip("subtitles", "Subtitles",
+    N.subs_on ? (N.strack || "on") : "off", N.subs_on ? "good" : ""));
+  applyIcons(box);
+
+  var w = $("np-warn");
+  var warns = arr(N.warn);
+  w.innerHTML = "";
+  w.classList.toggle("hidden", !warns.length);
+  warns.forEach(function (m) {
+    var d = el("div", "warnrow");
+    var i = el("span"); i.dataset.ic = "warning"; d.appendChild(i);
+    d.appendChild(el("span", null, m));
+    w.appendChild(d);
+  });
+  applyIcons(w);
+}
+
+/* ------------------------------------------------------------ autostart timer */
+var AUTO_KEY = "vlcplus.autostart";
+var autoJob = null, autoMode = "in", autoAnnounced = false;
+
+function autoLoad() {
+  try { autoJob = JSON.parse(localStorage.getItem(AUTO_KEY) || "null"); } catch (e) { autoJob = null; }
+  if (autoJob && autoJob.at < Date.now() - 60000) autoJob = null;   // too stale to fire
+  autoSave();
+}
+function autoSave() {
+  if (autoJob) localStorage.setItem(AUTO_KEY, JSON.stringify(autoJob));
+  else localStorage.removeItem(AUTO_KEY);
+  autoPaint();
+}
+function two(n) { return (n < 10 ? "0" : "") + n; }
+function clockOf(ms) { var d = new Date(ms); return two(d.getHours()) + ":" + two(d.getMinutes()); }
+function left(ms) {
+  var s = Math.max(0, Math.round(ms / 1000));
+  var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return (h ? h + ":" + two(m) : m) + ":" + two(s % 60);
+}
+function autoPaint() {
+  var b = $("auto-btn"), info = $("auto-info");
+  if (!b) return;
+  b.classList.toggle("on", !!autoJob);
+  if (!autoJob) { info.classList.add("hidden"); info.textContent = ""; return; }
+  info.classList.remove("hidden");
+  info.textContent = "Autostart in " + left(autoJob.at - Date.now()) + " (at " + clockOf(autoJob.at) + ")";
+  b.title = info.textContent;
+}
+
+/* mm:ss, hh:mm:ss or a bare number of minutes */
+function parseDelay(s) {
+  var p = String(s).trim().split(":").map(Number);
+  if (p.some(isNaN) || !p.length) return null;
+  if (p.length === 1) return p[0] * 60000;
+  if (p.length === 2) return (p[0] * 60 + p[1]) * 1000;
+  return (p[0] * 3600 + p[1] * 60 + p[2]) * 1000;
+}
+/* hh:mm today, or the same time tomorrow when it has already passed */
+function parseClock(s) {
+  var m = /^(\d{1,2})[:.](\d{2})$/.exec(String(s).trim());
+  if (!m) return null;
+  var h = +m[1], mi = +m[2];
+  if (h > 23 || mi > 59) return null;
+  var d = new Date();
+  d.setHours(h, mi, 0, 0);
+  if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
+function autoResolve() {
+  var v = $("auto-val").value;
+  if (autoMode === "in") {
+    var ms = parseDelay(v);
+    return (ms === null || ms <= 0) ? null : Date.now() + ms;
+  }
+  return parseClock(v);
+}
+function autoHint() {
+  var at = autoResolve();
+  $("auto-hint").textContent = at
+    ? "fires at " + clockOf(at) + ", in " + left(at - Date.now())
+    : ($("auto-val").value ? "cannot read that" : "");
+}
+function autoModeSet(m) {
+  autoMode = m;
+  $("auto-mode-in").classList.toggle("on", m === "in");
+  $("auto-mode-at").classList.toggle("on", m === "at");
+  $("auto-lbl").textContent = m === "in" ? "Countdown, mm:ss" : "Clock time, hh:mm";
+  $("auto-val").placeholder = m === "in" ? "10:00" : "20:30";
+  autoHint();
+}
+
+function autoFire(job) {
+  var chain = Promise.resolve();
+  if (job.what === "pl_play") {
+    var items = [];
+    plGroups().forEach(function (g) { if (!isLibrary(g.name)) items = items.concat(g.items); });
+    if (items.length) chain = cmd("pl_play", { id: items[0].id });
+    else chain = cmd("pl_play");
+  } else if (job.what === "pl_next") {
+    chain = cmd("pl_next");
+  } else {
+    chain = cmd("pl_play");
+  }
+  if (job.what === "fullscreen") chain = chain.then(function () { return cmd("fullscreen"); });
+  chain.then(function () { toast("autostart fired"); }, function () { toast("autostart failed", true); });
+}
+
+function autoTick() {
+  if (!autoJob) return;
+  var ms = autoJob.at - Date.now();
+  if (autoJob.osd && !autoAnnounced && ms <= 10000 && ms > 0) {
+    autoAnnounced = true;
+    act({ cmd: "osd", val: "Playback starts in 10 seconds", pos: "center", dur: 5 }).catch(function () {});
+  }
+  if (ms <= 0) {
+    var job = autoJob;
+    autoJob = null; autoAnnounced = false;
+    autoSave();
+    autoFire(job);
+    return;
+  }
+  autoPaint();
+}
+
+function initAuto() {
+  var dlg = $("auto-dlg");
+  $("auto-btn").addEventListener("click", function () {
+    if (autoJob) {
+      autoMode = "at";
+      $("auto-val").value = clockOf(autoJob.at);
+      $("auto-what").value = autoJob.what;
+      $("auto-osd").checked = !!autoJob.osd;
+    }
+    autoModeSet(autoMode);
+    dlg.showModal();
+    $("auto-val").focus();
+  });
+  $("auto-mode-in").addEventListener("click", function () { autoModeSet("in"); });
+  $("auto-mode-at").addEventListener("click", function () { autoModeSet("at"); });
+  $("auto-val").addEventListener("input", autoHint);
+  $("auto-val").addEventListener("keydown", function (e) { if (e.key === "Enter") $("auto-set").click(); });
+  $("auto-close").addEventListener("click", function () { dlg.close(); });
+  $("auto-cancel").addEventListener("click", function () {
+    autoJob = null; autoAnnounced = false; autoSave();
+    toast("timer cancelled"); dlg.close();
+  });
+  $("auto-set").addEventListener("click", function () {
+    var at = autoResolve();
+    if (!at) { toast("give a time like 10:00", true); return; }
+    autoJob = { at: at, what: $("auto-what").value, osd: $("auto-osd").checked };
+    autoAnnounced = false;
+    autoSave();
+    toast("autostart set for " + clockOf(at));
+    dlg.close();
+  });
+  autoLoad();
+  setInterval(autoTick, 1000);
 }
 
 /* ------------------------------------------------------------ status polling */
+var polling = false;
 function poll() {
+  if (polling) return Promise.resolve();
+  polling = true;
+  var done = function () { polling = false; };
+  return pollOnce().then(done, done);
+}
+function pollOnce() {
   var want = "status";
   if (curTab === "audio" || curTab === "subs" || curTab === "video" || curTab === "now") want += ",caps";
+  if (curTab === "now") want += ",now";
   if (curTab === "playlist") want += ",caps";
   if (curTab === "info") want += ",caps";
   return api({ want: want, info: "1" }).then(function (d) {
@@ -664,6 +1068,7 @@ function poll() {
     S = d.status || {};
     X = d.ext || {};
     if (d.caps) C = d.caps;
+    if (d.now) N = d.now;
     render();
   }).catch(function () {});
 }
@@ -702,14 +1107,17 @@ function render() {
   }
   $("t-len").textContent = fmt(S.length);
 
+  setIcon(document.querySelector('[data-key="play-pause"]'), S.state === "playing" ? "pause" : "play");
+
   if (S.currentplid !== lastArtId) {
     lastArtId = S.currentplid;
     var img = $("art");
-    img.onerror = function () { img.style.visibility = "hidden"; };
-    img.onload = function () { img.style.visibility = "visible"; };
-    img.style.visibility = "hidden";
+    img.onerror = function () { img.classList.remove("on"); };
+    img.onload = function () { img.classList.add("on"); };
+    img.classList.remove("on");
     if (S.currentplid > 0) img.src = "/art?item=" + S.currentplid + "&_=" + Date.now();
-    if (curTab === "playlist" || curTab === "now") loadPlaylist();
+    $("np-list")._scrolled = false;
+    loadPlaylist();
   }
 
   if (!held("vol")) {
@@ -769,7 +1177,7 @@ function render() {
 
   // live audio filters
   $("b-mute").classList.toggle("on", !!X.mute);
-  $("b-mute").textContent = X.mute ? "Muted — click to unmute" : "Sound on — click to mute";
+  setLabel($("b-mute"), X.mute ? "Muted — click to unmute" : "Sound on — click to mute");
   if (!held("afilter-raw")) {
     var chain = X.audio_filter != null ? X.audio_filter : (CFGVAL["audio-filter"] || "");
     $("afilter-raw").value = chain;
@@ -815,8 +1223,10 @@ function render() {
       });
       sdBox.appendChild(b);
     });
+    applyIcons(sdBox);
   }
 
+  if (curTab === "now") renderNowInfo();
   if (curTab === "info") renderInfo();
 }
 
@@ -851,9 +1261,11 @@ function renderInfo() {
 
 /* ------------------------------------------------------------ boot */
 initTabs(); initDelegated(); initNow(); initAudio(); initSubs(); initVideo();
-initPlaylist(); initBrowse(); initKeys();
+initPlaylist(); initBrowse(); initKeys(); initAuto();
+applyIcons();
 pollAll();
 loadPlaylist();
+browse("~");
 setInterval(poll, 1000);
-setInterval(function () { if (curTab === "playlist") loadPlaylist(); }, 5000);
+setInterval(function () { if (curTab === "playlist" || curTab === "now") loadPlaylist(); }, 5000);
 })();

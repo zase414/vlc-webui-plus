@@ -93,6 +93,61 @@ input[type=checkbox]{width:auto;accent-color:var(--acc)}
 #toast.show{opacity:1}
 #toast.err{border-color:var(--bad);color:var(--bad)}
 
+/* ---- icons ---- */
+.ic{width:1.15em;height:1.15em;flex:0 0 auto;vertical-align:-0.2em;fill:currentColor;pointer-events:none}
+button .ic{margin-right:.4em}
+button.sq .ic,button.icon-only .ic{margin-right:0}
+nav button .ic{margin-right:.35em;opacity:.85}
+h2 .ic{width:1em;height:1em;margin-right:.45em;vertical-align:-0.13em}
+.item .ic{color:var(--fg2)}
+.item.cur .ic{color:var(--acc)}
+.transport .ic{width:1.25em;height:1.25em}
+
+/* ---- artwork ---- */
+.artwrap{position:relative;width:110px;height:110px;flex:0 0 auto;border-radius:6px;
+  background:var(--bg3);display:flex;align-items:center;justify-content:center;overflow:hidden}
+.artwrap img{width:100%;height:100%;object-fit:cover;display:none}
+.artwrap img.on{display:block}
+.artwrap .artfall .ic{width:38px;height:38px;color:var(--line)}
+.artwrap img.on ~ .artfall{display:none}
+
+/* ---- breadcrumbs ---- */
+.crumbs{display:flex;align-items:center;flex-wrap:wrap;gap:2px;margin:10px 0 8px;font-size:13px}
+.crumbs button{background:none;border:0;color:var(--fg2);padding:3px 6px;border-radius:4px}
+.crumbs button:hover{background:var(--bg3);color:var(--fg)}
+.crumbs button.last{color:var(--fg);font-weight:600}
+.crumbs .sep{color:var(--line);display:flex;align-items:center}
+.crumbs .sep .ic{width:12px;height:12px}
+
+.item .meta2{color:var(--fg2);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.grouphdr{padding:6px 8px;background:var(--bg3);color:var(--fg2);font-size:11px;
+  text-transform:uppercase;letter-spacing:.06em;position:sticky;top:0;z-index:1}
+code{background:var(--bg3);padding:1px 4px;border-radius:3px;font-size:11px}
+
 table.info{width:100%;border-collapse:collapse;font-size:12px}
 table.info td{border-bottom:1px solid var(--line);padding:3px 6px;vertical-align:top}
 table.info td:first-child{color:var(--fg2);width:38%;word-break:break-word}
+.item.past{opacity:.5}
+.item.past:hover{opacity:1}
+
+/* ---- stream summary chips ---- */
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 4px}
+.chip{display:inline-flex;align-items:center;gap:5px;background:var(--bg3);border:1px solid var(--line);
+  border-radius:12px;padding:2px 9px;font-size:12px;color:var(--fg2);max-width:100%}
+.chip b{color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip .ic{width:14px;height:14px;margin:0}
+.chip.good{border-color:var(--ok)} .chip.good .ic{color:var(--ok)}
+.chip.bad{border-color:var(--acc)} .chip.bad .ic{color:var(--acc)}
+
+.warnbox{margin:6px 0 2px}
+.warnrow{display:flex;gap:6px;align-items:flex-start;font-size:12px;color:var(--acc);
+  background:#2a2113;border:1px solid var(--acc);border-radius:6px;padding:6px 9px;margin-top:4px}
+.warnrow .ic{width:15px;height:15px;margin:1px 0 0}
+
+/* ---- dialog ---- */
+dialog{background:var(--bg2);color:var(--fg);border:1px solid var(--line);border-radius:10px;
+  padding:16px;max-width:420px;width:92vw}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+dialog h2{display:flex;align-items:center}
+#auto-btn.on{background:var(--acc);border-color:var(--acc);color:#1a1200}
+#auto-info{margin-top:6px;color:var(--acc)}
