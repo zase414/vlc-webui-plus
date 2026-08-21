@@ -488,6 +488,46 @@ if want["now"] then
     R.now = n
 end
 
+if want["resolve"] then
+    -- browsers hand over a dropped file's name but never its path, so look it up
+    local names = G["name"]
+    if names == nil then names = {} elseif type(names) ~= "table" then names = { names } end
+    local dirs = G["dir"]
+    if dirs == nil then dirs = {} elseif type(dirs) ~= "table" then dirs = { dirs } end
+
+    -- homedir() is Documents on Windows, the profile is where the real folders live
+    local home    = normpath(vlc.config.homedir() or "")
+    local profile = normpath(os.getenv("USERPROFILE") or os.getenv("HOME") or home)
+
+    local search, seen = {}, {}
+    local function add(d)
+        if d and d ~= "" and not seen[d] then seen[d] = true; search[#search+1] = d end
+    end
+    for _, d in ipairs(dirs) do add(normpath(d)) end
+    add(home)
+    add(profile)
+    for _, base in ipairs({ profile, home }) do
+        for _, sub in ipairs({ "Desktop", "Downloads", "Videos", "Music", "Pictures", "Movies", "Documents" }) do
+            add(joinpath(base, sub))
+        end
+    end
+
+    local out = { _array = {} }
+    for _, n in ipairs(names) do
+        local hit = nil
+        for _, d in ipairs(search) do
+            local p = joinpath(d, n)
+            local s = vlc.net.stat(p)
+            if s then hit = p; break end
+        end
+        local e = { name = n, found = (hit ~= nil) }
+        if hit then e.path = hit; e.uri = vlc.strings.make_uri(nativepath(hit)) end
+        out._array[#out._array+1] = e
+    end
+    R.resolve = out
+    R.searched = { _array = search }
+end
+
 if want["playlist"] then R.playlist = try(httprequests.playlisttable) end
 
 if want["browse"] then

@@ -1049,6 +1049,112 @@ function initAuto() {
   setInterval(autoTick, 1000);
 }
 
+/* ------------------------------------------------------------ drag and drop */
+/* browsers expose a dropped file's name but never its path, so names get
+   resolved against the folder on the Browse tab and the usual user folders */
+function resolveNames(names) {
+  return api({ want: "resolve", name: names, dir: brDir && brDir !== "~" ? brDir : "" });
+}
+
+/* text wins over files: a dragged link or path is already usable as is */
+function droppedItems(dt) {
+  var txt = "";
+  try { txt = dt.getData("text/uri-list") || dt.getData("text/plain") || ""; } catch (e) {}
+  var lines = txt.split(/[\r\n]+/).map(function (s) { return s.trim(); })
+                 .filter(function (s) { return s && s.charAt(0) !== "#"; });
+  if (lines.length) return Promise.resolve({ items: lines, missed: [] });
+
+  var names = Array.prototype.map.call(dt.files || [], function (f) { return f.name; });
+  if (!names.length) return Promise.resolve({ items: [], missed: [] });
+  return resolveNames(names).then(function (d) {
+    var out = [], missed = [];
+    arr(d.resolve).forEach(function (r) {
+      if (r.found) out.push(r.uri || r.path); else missed.push(r.name);
+    });
+    return { items: out, missed: missed };
+  });
+}
+
+/* one toast for the whole drop, so a partial failure is not hidden by success */
+function dropNote(n, missed, verb) {
+  var msg = n ? verb + " " + n + " item(s)" : "";
+  if (missed.length) {
+    msg += (msg ? ". " : "") + "Could not locate " + missed.join(", ") +
+           " — browsers hide file paths. Open its folder on the Browse tab, then drop again.";
+  }
+  if (msg) toast(msg, missed.length > 0);
+}
+
+function installDrop(node, handler) {
+  if (!node || node._drop) return;
+  node._drop = true;
+  var depth = 0;
+  var off = function () { depth = 0; node.classList.remove("dragover"); };
+  node.addEventListener("dragenter", function (e) {
+    e.preventDefault(); e.stopPropagation();
+    depth++; node.classList.add("dragover");
+  });
+  node.addEventListener("dragover", function (e) {
+    e.preventDefault(); e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+  });
+  node.addEventListener("dragleave", function (e) {
+    e.stopPropagation();
+    if (--depth <= 0) off();
+  });
+  node.addEventListener("drop", function (e) {
+    e.preventDefault(); e.stopPropagation();
+    off();
+    droppedItems(e.dataTransfer).then(function (res) {
+      if (res.items.length || res.missed.length) handler(res.items, res.missed);
+    }, function (err) { toast(err.message, true); });
+  });
+}
+
+function initDrop() {
+  // a stray drop anywhere else must not make the browser navigate away
+  ["dragover", "drop"].forEach(function (t) {
+    window.addEventListener(t, function (e) { e.preventDefault(); }, false);
+  });
+
+  // text fields that hold a path or a url
+  var fields = ["subpath", "br-path", "add-uris", "osd-text"];
+  Array.prototype.forEach.call(document.querySelectorAll('[id^="cfg_"]'), function (f) {
+    if (f.type === "text" && /dir|path|file|font/i.test(f.id)) fields.push(f.id);
+  });
+  fields.forEach(function (id) {
+    var f = $(id);
+    if (!f) return;
+    f.dataset.drop = "path";
+    installDrop(f, function (items, missed) {
+      if (items.length) {
+        if (f.tagName === "TEXTAREA") {
+          var cur = f.value.replace(/\s+$/, "");
+          f.value = (cur ? cur + "\n" : "") + items.join("\n");
+        } else {
+          f.value = items[0];
+        }
+        f.dispatchEvent(new Event("input"));
+        f.dispatchEvent(new Event("change"));
+      }
+      dropNote(items.length, missed, "dropped");
+    });
+  });
+
+  // the queues take media straight away
+  ["pl-list", "np-list", "br-list"].forEach(function (id) {
+    var n = $(id);
+    if (!n) return;
+    installDrop(n, function (items, missed) {
+      if (!items.length) { dropNote(0, missed, "queued"); return; }
+      act({ cmd: "pl_add", uri: items, opts: addOptions(), play: "0" }).then(function () {
+        dropNote(items.length, missed, "queued");
+        loadPlaylist();
+      });
+    });
+  });
+}
+
 /* ------------------------------------------------------------ status polling */
 var polling = false;
 function poll() {
@@ -1261,7 +1367,7 @@ function renderInfo() {
 
 /* ------------------------------------------------------------ boot */
 initTabs(); initDelegated(); initNow(); initAudio(); initSubs(); initVideo();
-initPlaylist(); initBrowse(); initKeys(); initAuto();
+initPlaylist(); initBrowse(); initKeys(); initAuto(); initDrop();
 applyIcons();
 pollAll();
 loadPlaylist();

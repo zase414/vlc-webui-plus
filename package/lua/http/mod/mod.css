@@ -151,3 +151,8 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 dialog h2{display:flex;align-items:center}
 #auto-btn.on{background:var(--acc);border-color:var(--acc);color:#1a1200}
 #auto-info{margin-top:6px;color:var(--acc)}
+
+/* ---- drag and drop ---- */
+.dragover{outline:2px dashed var(--acc);outline-offset:-3px;background:#2a2113}
+.list.dragover{background:#2a2113}
+input.dragover,textarea.dragover{border-color:var(--acc)}

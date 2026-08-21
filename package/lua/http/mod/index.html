@@ -392,7 +392,7 @@
   <div class="card">
     <h2 data-ic="list-plus">Add media</h2>
     <div class="field">
-      <label>URL, stream or local path (one per line)</label>
+      <label>URL, stream or local path (one per line) &mdash; drops welcome</label>
       <textarea id="add-uris" rows="3" placeholder="https://example.com/stream.m3u8&#10;D:\music\song.flac"></textarea>
     </div>
     <div class="grid" style="margin-top:10px">
@@ -448,6 +448,7 @@
       <button id="pl-clear" data-ic="broom">Clear</button>
     </div>
     <div class="list" id="pl-list" style="margin-top:8px"></div>
+    <div class="small muted" style="margin-top:6px">Drop files or links anywhere on the list to queue them.</div>
   </div>
 
   <div class="card">
@@ -476,6 +477,7 @@
     <div class="row small muted" id="br-hint" style="margin-top:8px">
       Click a folder to open it, a file to play it. The add options from the Playlist tab
       are applied to anything you queue here.
+      Files and links can be dropped onto the list to queue them.
     </div>
   </div>
 </section>

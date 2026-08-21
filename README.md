@@ -152,6 +152,28 @@ optional *media only* filter that hides anything that is not a media, subtitle
 or playlist file. Click a folder to open it, a file to play it, or use the
 per-row *play* / *queue* / *as sub* actions. Typing a raw path is still there
 behind the text button. Paths are normalised, so no more `C:\/Desktop`.
+
+### Drag and drop
+
+Files and links can be dropped onto:
+
+* the playlist on the **Playlist** tab and the queue on **Now Playing** — dropped
+  media is enqueued straight away, with the current add options applied
+* the file list on the **Browse** tab
+* any path or URL field: the subtitle loader, the browse path box, the add-media
+  box, the on-screen message field, and preference fields that hold a folder,
+  a file or a font
+
+Dropping a **link or text** always works: the URL or path is used as it stands.
+
+Dropping a **file from the file manager** is more awkward, because browsers hand
+over the file's name but never its path — there is nothing this interface can do
+about that. So a dropped name is looked up in the folder currently open on the
+Browse tab, then in your profile, Desktop, Downloads, Videos, Music, Pictures,
+Documents and VLC's own home folder. If it is found, it is added; if it is not,
+you are told so and asked to open its folder on the Browse tab and drop again,
+which always works.
+
 ### Hotkeys
 Every VLC action as a button — navigation, disc menu, titles, chapters, crop
 edges, 360° field of view, zoom presets, programs and more. The grid hides
@@ -172,6 +194,7 @@ stock `?command=` still works. On top of that:
 | --- | --- |
 | `want=` | comma list of payloads: `status`, `caps`, `playlist`, `browse`, `config`, `vars`, `keys` |
 | `want=browse` | `path=` (empty lists drives, `~` is home), `show=media` to filter |
+| `want=resolve` | repeatable `name=` plus optional `dir=`, stats each name against the browse folder and the usual user folders, returns `path` and `uri` when found |
 | `want=now` | stream summary: video res/fps, audio channels source vs decoded, selected track names, and a `warn` array of misconfigurations |
 | `cmd=setvar` | `obj=input\|aout\|vout\|playlist\|libvlc`, `name=`, `val=`, optional `type=int\|float\|bool\|string` |
 | `cmd=setconfig` | `name=`, `val=` — any VLC preference |
@@ -214,6 +237,9 @@ Two payloads are worth knowing about when extending this:
 * Preferences changed here are not written to `vlcrc`; they last until VLC exits.
 * Info keys from VLC are translated to the player language, so the stream
   summary matches on the shape of the values rather than on English key names.
+* Browsers do not expose a dropped file's path, only its name, so file drops
+  are resolved by looking the name up in a short list of folders. Dropping a
+  link, or dropping onto the Browse tab while its folder is open, is exact.
 * The autostart timer lives in the browser tab, not in VLC. Closing the page
   cancels it; reloading does not.
 * `sub-text-scale` lives on the playlist object rather than the input in VLC
