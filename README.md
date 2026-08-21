@@ -76,6 +76,17 @@ plain words, for example:
 The channel chip shows both sides when they differ, so `5.1 → Stereo` tells you
 at a glance that the movie is surround but your speakers are not getting it.
 
+**Pause at next** is a toggle with two behaviours, because VLC offers one and
+the interface can fake the other:
+
+| Mode | What happens | Where the state lives |
+| --- | --- | --- |
+| On the last frame of this track | VLC own `play-and-pause`. Playback freezes on the final frame and pressing play moves to the next track. | VLC, so it survives closing the page |
+| Once the next track has started | The interface spots the track change and pauses the new item at the start. | The browser tab |
+
+Both stay on until you switch them off. Picking a track yourself does not
+trigger the second mode, only an automatic advance does.
+
 The clock button next to the transport controls opens **Autostart**: play at a
 clock time (`hh:mm`) or after a countdown (`mm:ss`), optionally announcing it on
 screen ten seconds before, and optionally restarting the playlist, skipping to
@@ -117,8 +128,9 @@ Clicking a row jumps to it; reordering and deleting live on the Playlist tab.
 
 ### Video
 * Video track, aspect ratio, crop, zoom, deinterlace on/off and mode, program
-* Live image adjust — contrast, brightness, hue, saturation, gamma — including
-  loading the `adjust` filter for you when you enable it
+* Image adjust — contrast, brightness, hue, saturation, gamma — including
+  loading the `adjust` filter for you when you enable it. See the note below
+  about when these actually take effect.
 * Preferences: video on/off, start fullscreen, always on top, wallpaper mode,
   title display, default deinterlace/aspect/crop, filter chain, and snapshot
   folder, format, prefix and numbering
@@ -195,6 +207,7 @@ stock `?command=` still works. On top of that:
 | `want=` | comma list of payloads: `status`, `caps`, `playlist`, `browse`, `config`, `vars`, `keys` |
 | `want=browse` | `path=` (empty lists drives, `~` is home), `show=media` to filter |
 | `want=resolve` | repeatable `name=` plus optional `dir=`, stats each name against the browse folder and the usual user folders, returns `path` and `uri` when found |
+| `cmd=setconfig&name=play-and-pause` | VLC own pause-on-last-frame, used by the Pause at next toggle |
 | `want=now` | stream summary: video res/fps, audio channels source vs decoded, selected track names, and a `warn` array of misconfigurations |
 | `cmd=setvar` | `obj=input\|aout\|vout\|playlist\|libvlc`, `name=`, `val=`, optional `type=int\|float\|bool\|string` |
 | `cmd=setconfig` | `name=`, `val=` — any VLC preference |
@@ -247,6 +260,16 @@ Two payloads are worth knowing about when extending this:
 * Per-item options (gain, image duration, start/stop) can only be set when an
   item is added. VLC 3.x offers no way to change the options of a playlist entry
   that already exists, so to change them you re-add the item.
+* Image adjust values are **not live** on VLC 3.0.23. Loading and unloading the
+  filter chain works immediately (`invert` visibly changes the picture), but
+  `brightness`, `contrast` and `saturation` set on the running video output are
+  ignored: the filter reads them once when it is created and nothing forwards
+  later changes to it. Snapshots taken at brightness 0.1 and 1.0 came back byte
+  identical. They apply to the next video that starts.
+* There is **no crossfade between playlist items**, and no way to build one from
+  here. VLC plays one input at a time, tears it down and creates the next, so
+  there is no overlap to fade across. A fade to black is not reachable either,
+  for the reason above.
 * `vlc.strings.make_uri` mangles Windows paths given with forward slashes, so
   paths are converted back to backslashes before a uri is built.
 

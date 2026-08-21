@@ -159,6 +159,17 @@
         </div>
       </div>
       <div class="field">
+        <label>Pause at next</label>
+        <div class="row">
+          <button id="b-pausenext" data-ic="pause">Off</button>
+          <select id="pausenext-mode" title="Where the pause happens">
+            <option value="native">On the last frame of this track</option>
+            <option value="client">Once the next track has started</option>
+          </select>
+        </div>
+        <span class="small muted" id="pausenext-hint"></span>
+      </div>
+      <div class="field">
         <label>Title / Chapter</label>
         <div class="row">
           <select id="sel-title"></select>
@@ -378,6 +389,7 @@
   <div class="card">
     <h2 data-ic="sliders-horizontal">Image adjust</h2>
     <div class="row"><label class="small"><input type="checkbox" id="adjust-on"> Enable adjust filter</label></div>
+    <p class="small muted">On VLC 3.0.23 these values are read when the filter starts, so they apply to the next video rather than the one on screen.</p>
     <div id="adjust" class="grid"></div>
   </div>
 

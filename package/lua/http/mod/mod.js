@@ -105,6 +105,8 @@ function act(params, quick) {
 }
 function key(name)  { return act({ cmd: "key", val: name }); }
 function cmd(name, extra) {
+  // a track change we asked for is not an automatic one
+  if (/^pl_(play|next|previous)$/.test(name)) pnSkipUntil = Date.now() + 2500;
   var p = { command: name };
   if (extra) Object.keys(extra).forEach(function (k) { p[k] = extra[k]; });
   return act(p);
@@ -366,6 +368,7 @@ function cfgKeys() {
   Object.keys(CFG).forEach(function (g) { CFG[g].forEach(function (d) { k.push(d.k); }); });
   ADJUST.forEach(function (d) { k.push(d.k); });
   k.push("equalizer-2pass");
+  k.push("play-and-pause");
   return k.join(",");
 }
 
@@ -855,6 +858,70 @@ function renderMini() {
   if (c && !list._scrolled) { list.scrollTop = Math.max(0, c.offsetTop - 60); list._scrolled = true; }
 }
 
+/* ------------------------------------------------------------ pause at next */
+/* native: VLC's own play-and-pause, freezes on the last frame of the item
+   client: we watch for the track change and pause the new item ourselves */
+var PN_KEY = "vlcplus.pausenext";
+var pnMode = "native", pnArmed = false, pnSkipUntil = 0;
+
+function pnLoad() {
+  var s = null;
+  try { s = JSON.parse(localStorage.getItem(PN_KEY) || "null"); } catch (e) {}
+  if (s) { pnMode = s.mode || "native"; pnArmed = !!s.armed; }
+  $("pausenext-mode").value = pnMode;
+  // the native flag lives in VLC, so it survives page reloads on its own
+  if (pnMode === "native") pnArmed = false;
+}
+function pnSave() {
+  localStorage.setItem(PN_KEY, JSON.stringify({ mode: pnMode, armed: pnArmed }));
+}
+function pnOn() {
+  return pnMode === "native" ? !!CFGVAL["play-and-pause"] : pnArmed;
+}
+function pnPaint() {
+  var b = $("b-pausenext");
+  if (!b) return;
+  var on = pnOn();
+  b.classList.toggle("on", on);
+  setLabel(b, on ? "On" : "Off");
+  $("pausenext-hint").textContent = on
+    ? (pnMode === "native"
+        ? "Playback will stop on the last frame. Press play to go to the next track."
+        : "The next track will start and then pause at the beginning.")
+    : "";
+}
+function pnSet(on) {
+  if (pnMode === "native") {
+    return setcfg("play-and-pause", on ? "1" : "0", "bool").then(function () {
+      CFGVAL["play-and-pause"] = on;
+      pnPaint();
+    });
+  }
+  pnArmed = on; pnSave(); pnPaint();
+  return Promise.resolve();
+}
+function initPauseNext() {
+  $("b-pausenext").addEventListener("click", function () { pnSet(!pnOn()); });
+  $("pausenext-mode").addEventListener("change", function () {
+    var was = pnOn();
+    // moving between modes must not leave the old one still armed
+    pnSet(false).then(function () {
+      pnMode = this.value; pnSave(); pnPaint();
+      if (was) pnSet(true);
+    }.bind(this));
+  });
+  pnLoad();
+}
+/* called from render() when the current item changes */
+function pnOnTrackChange() {
+  if (pnMode !== "client" || !pnArmed) return;
+  if (Date.now() < pnSkipUntil) return;   // the user picked this track themselves
+  // give the new input a moment to actually start, then stop it
+  setTimeout(function () {
+    cmd("pl_pause").then(function () { toast("paused on the new track"); });
+  }, 250);
+}
+
 /* ------------------------------------------------------------ stream summary */
 var N = {};
 
@@ -1194,6 +1261,7 @@ function pollAll() {
       }
     });
     if (!held("eq-2pass")) $("eq-2pass").checked = !!CFGVAL["equalizer-2pass"];
+    pnPaint();
   }).catch(function () {});
 }
 
@@ -1216,7 +1284,9 @@ function render() {
   setIcon(document.querySelector('[data-key="play-pause"]'), S.state === "playing" ? "pause" : "play");
 
   if (S.currentplid !== lastArtId) {
+    var first = (lastArtId === null);
     lastArtId = S.currentplid;
+    if (!first && S.currentplid > 0) pnOnTrackChange();
     var img = $("art");
     img.onerror = function () { img.classList.remove("on"); };
     img.onload = function () { img.classList.add("on"); };
@@ -1367,7 +1437,7 @@ function renderInfo() {
 
 /* ------------------------------------------------------------ boot */
 initTabs(); initDelegated(); initNow(); initAudio(); initSubs(); initVideo();
-initPlaylist(); initBrowse(); initKeys(); initAuto(); initDrop();
+initPlaylist(); initBrowse(); initKeys(); initAuto(); initDrop(); initPauseNext();
 applyIcons();
 pollAll();
 loadPlaylist();
