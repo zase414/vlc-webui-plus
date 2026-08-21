@@ -58,8 +58,8 @@ goes wrong, including damage caused by something other than this mod.
 
 ### Now Playing
 Artwork, title and metadata, seek bar, transport controls, frame step,
-fullscreen, snapshot, recording, volume, playback speed, random / loop / repeat,
-and title and chapter selection.
+fullscreen, snapshot, recording, volume with mute and −5 / +5 % steps, playback
+speed, random / loop / repeat, and title and chapter selection.
 
 Under the title sits a **stream summary**: resolution, frame rate, aspect ratio,
 channel layout, sample rate, the name of the selected audio track, and whether
@@ -141,9 +141,9 @@ reorder, delete, clear, filter, sort by title / artist / album / duration / id /
 shuffle, and toggle any media source (UPnP, SAP, podcasts, Icecast, Jamendo,
 discs, media folders...).
 
-VLC's playlist root actually holds two nodes — the playlist and the media
-library — so they are shown as separate groups, and the library is hidden behind
-a checkbox rather than silently mixed into the queue.
+Only the real playlist is listed. VLC's playlist root also holds the media
+library and a node for every active discovery service, so UPnP servers and the
+like no longer leak into the queue; the media library sits behind a checkbox.
 
 **Per-item options** are set on the add form and apply to everything you queue,
 whether from this tab or from Browse:
@@ -156,6 +156,47 @@ whether from this tab or from Browse:
 | Extra options | anything | free text, colon separated |
 
 The form previews the exact option string before you commit it.
+
+**Editing an item afterwards** — the slider button on each row opens a dialog for
+that item's gain and extra options. VLC cannot edit a queued entry, so the
+interface queues a fresh copy with the new options, moves it into the slot the
+old one held, and deletes the old one. If the item was the one playing it is
+started again. The gain is remembered per URL in the browser and shown as a
+badge on the row, because VLC never reports an item's options back.
+
+Paths pasted from Windows Explorer's *Copy as path* arrive wrapped in `"`
+quotes. Those are stripped, in the browser as you paste and again on the server.
+
+### Players — running more than one stream at once
+A single VLC process plays one input at a time. Playing, say, an mp4 and a
+separate mp3 together therefore needs **two VLC processes**, and the row above
+the tabs is how you move between them.
+
+Each entry is one player: a name and the address of its web interface. Clicking
+one loads that player's own copy of this page, carrying the list of players
+across so both sides stay in sync. Nothing is fetched across origins, so no CORS
+or mixed-password trouble — but each player has its own web password, so the
+browser asks for it the first time you visit that port.
+
+**Add a player** opens a dialog. If the host VLC's Lua sandbox allows it (this
+build does), *Launch* starts a second `vlc.exe` on the port you gave, with the
+web interface enabled. It needs a password: VLC refuses to open the interface
+without one, and the mod must already be installed for the new instance to
+serve this page. You can also start it yourself:
+
+```
+vlc.exe --extraintf http --http-port 8100 --http-password yourpassword --no-one-instance
+```
+
+Removing a player from the row only forgets the address; it does not stop the
+process.
+
+### The docked transport
+Every tab except Now Playing gets a fixed strip along the bottom of the window:
+current title, progress with a seek bar, elapsed and total time, play/pause,
+previous, next, stop, ±10 s, volume ±5 % with a mute button, and a jump back to
+Now Playing. It is driven by the same status poll as the main view, so it never
+disagrees with it.
 
 ### Browse
 A proper file picker: a clickable breadcrumb, a parent button, home and drives
@@ -204,7 +245,8 @@ stock `?command=` still works. On top of that:
 
 | Parameter | Meaning |
 | --- | --- |
-| `want=` | comma list of payloads: `status`, `caps`, `playlist`, `browse`, `config`, `vars`, `keys` |
+| `want=` | comma list of payloads: `status`, `caps`, `playlist`, `browse`, `config`, `vars`, `keys`, `now` |
+| `can_spawn` | always returned: whether this build can start another player process |
 | `want=browse` | `path=` (empty lists drives, `~` is home), `show=media` to filter |
 | `want=resolve` | repeatable `name=` plus optional `dir=`, stats each name against the browse folder and the usual user folders, returns `path` and `uri` when found |
 | `cmd=setconfig&name=play-and-pause` | VLC own pause-on-last-frame, used by the Pause at next toggle |
@@ -217,7 +259,8 @@ stock `?command=` still works. On top of that:
 | `cmd=eq_set` | `enable=`, `preset=`, `preamp=`, `b0..b9=` |
 | `cmd=addsub` | `val=` path or URL, `select=0` to load without selecting |
 | `cmd=pl_add` | repeatable `uri=`, `opts=` colon separated, `play=1` to play now |
-| `cmd=pl_move` | `id=`, `target=` |
+| `cmd=pl_move` | `id=` plus either `pos=` (1-based slot) or `target=` (the item to land behind) |
+| `cmd=spawn` | `port=`, `pw=`, optional `exe=` — starts another VLC with the web interface on that port |
 | `cmd=pl_delete_many` | repeatable `id=` |
 | `cmd=sd_toggle` | `val=` service name |
 | `cmd=aout_device` | `val=` device id |
@@ -257,9 +300,18 @@ Two payloads are worth knowing about when extending this:
   cancels it; reloading does not.
 * `sub-text-scale` lives on the playlist object rather than the input in VLC
   3.x, which is why the size slider keeps working between items.
+  Doing the queue, move and delete inside one request corrupts VLC's playlist
+  and crashes it, so those steps are deliberately sent as separate requests.
 * Per-item options (gain, image duration, start/stop) can only be set when an
-  item is added. VLC 3.x offers no way to change the options of a playlist entry
-  that already exists, so to change them you re-add the item.
+  item is added. VLC 3.x offers no way to change the options of an entry that
+  already exists, so the item volume editor re-adds the item in its slot.
+  Queueing, moving and deleting inside one request corrupts VLC's playlist and
+  crashes it, so those steps are deliberately sent as separate requests.
+* `vlc.playlist.move(id, target)` places the item **after** `target`, it is not
+  an index. `cmd=pl_move&pos=` does the translation.
+* An item's options are never reported back by VLC, so the gain shown on a
+  playlist row is remembered by the browser, per URL. Clearing site data or
+  editing the item from the player itself loses that note.
 * Image adjust values are **not live** on VLC 3.0.23. Loading and unloading the
   filter chain works immediately (`invert` visibly changes the picture), but
   `brightness`, `contrast` and `saturation` set on the running video output are
@@ -270,6 +322,9 @@ Two payloads are worth knowing about when extending this:
   here. VLC plays one input at a time, tears it down and creates the next, so
   there is no overlap to fade across. A fade to black is not reachable either,
   for the reason above.
+* Multiple simultaneous streams need multiple VLC processes; VLC 3.x plays one
+  input per instance. The Players row switches between them by navigation, not
+  by cross-origin requests, so each player asks for its own password once.
 * `vlc.strings.make_uri` mangles Windows paths given with forward slashes, so
   paths are converted back to backslashes before a uri is built.
 

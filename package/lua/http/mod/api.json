@@ -129,11 +129,37 @@ local function isuri(u)
     return string.match(u, "^%a[%w+.-]+://") ~= nil
 end
 
+-- windows "copy as path" wraps the path in quotes, strip them and any stray space
+local function unquote(u)
+    if not u then return nil end
+    u = string.gsub(u, "^%s+", "")
+    u = string.gsub(u, "%s+$", "")
+    u = string.gsub(u, '^[\'"]+', "")
+    u = string.gsub(u, '[\'"]+$', "")
+    return u
+end
+
 -- turn a plain path into a uri, leave real uris alone
 local function touri(u)
+    u = unquote(u)
     if not u or u == "" then return nil end
     if isuri(u) then return u end
     return vlc.strings.make_uri(nativepath(u)) or u
+end
+
+-- vlc.playlist.move drops an item right after the target, so a position needs the item before it
+local function movetopos(id, pos)
+    local root = vlc.playlist.get("playlist", false)
+    if not root then return false end
+    if pos <= 1 then return vlc.playlist.move(id, root.id) or true end
+    local n = 0
+    for _, c in ipairs(root.children or {}) do
+        if c.id ~= id then
+            n = n + 1
+            if n == pos - 1 then return vlc.playlist.move(id, c.id) or true end
+        end
+    end
+    return false
 end
 
 -- ---------------------------------------------------------------- commands
@@ -195,7 +221,7 @@ elseif cmd == "eq_set" then
 
 elseif cmd == "addsub" then
     -- add_subtitle takes a plain path, add_subtitle_mrl takes a uri
-    local v = arg("val")
+    local v = unquote(arg("val"))
     local auto = (arg("select", "1") ~= "0")
     if not v then
         fail("no subtitle given")
@@ -224,15 +250,38 @@ elseif cmd == "pl_add" then
     end
 
 elseif cmd == "pl_move" then
-    try(vlc.playlist.move, math.floor(num("id", -1)), math.floor(num("target", 0)))
+    -- pos is a 1-based slot, target is the item to land behind
+    local id = math.floor(num("id", -1))
+    if G["pos"] then try(movetopos, id, math.floor(num("pos", 1)))
+    else try(vlc.playlist.move, id, math.floor(num("target", 0))) end
 
 elseif cmd == "pl_delete_many" then
     local ids = G["id"]
     if type(ids) ~= "table" then ids = { ids } end
     for _, i in ipairs(ids) do try(vlc.playlist.delete, math.floor(tonumber(i) or -1)) end
 
+elseif cmd == "spawn" then
+    -- a second player is a second VLC process on another http port
+    if type(os) ~= "table" or type(os.execute) ~= "function" then
+        fail("os.execute is not available in this Lua sandbox")
+    else
+        local port = math.floor(num("port", 8081))
+        local pw = arg("pw", "")
+        local exe = unquote(arg("exe"))
+        if not exe or exe == "" then
+            local d = nil
+            local ok, v = pcall(vlc.config.datadir)
+            if ok then d = v end
+            exe = d and (d .. "/vlc.exe") or "vlc.exe"
+        end
+        local c = string.format('start "" "%s" --extraintf http --http-port %d'
+            .. ' --http-password "%s" --no-one-instance --no-volume-save', exe, port, pw)
+        R.spawn_cmd = c
+        R.spawned = os.execute(c) and true or false
+    end
+
 elseif cmd == "sd_toggle" then
-    local v = arg("val")
+    local v = unquote(arg("val"))
     if vlc.sd.is_loaded(v) then try(vlc.sd.remove, v) else try(vlc.sd.add, v) end
 end
 
@@ -274,6 +323,9 @@ if want["status"] then
     x.video_filter = varget(vout, "video-filter")
     R.ext = x
 end
+
+-- can this build start a second player process for itself?
+R.can_spawn = (type(os) == "table" and type(os.execute) == "function")
 
 if want["caps"] then
     local c = {}
@@ -535,6 +587,7 @@ if want["browse"] then
     local p = G["path"]
     if p == nil then p = G["dir"] end
     if p == nil then p = "~" end
+    p = unquote(p)
     if p == "~" then p = vlc.config.homedir() end
     p = normpath(p)
 

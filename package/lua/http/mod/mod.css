@@ -156,3 +156,26 @@ dialog h2{display:flex;align-items:center}
 .dragover{outline:2px dashed var(--acc);outline-offset:-3px;background:#2a2113}
 .list.dragover{background:#2a2113}
 input.dragover,textarea.dragover{border-color:var(--acc)}
+
+/* --- player switcher row --- */
+#players{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:4px 0 0}
+#players .plabel{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--fg2)}
+#players button.pl{border-radius:12px;padding:2px 10px;font-size:12px}
+#players button.pl.on{background:var(--acc2);border-color:var(--acc2);color:#04122b}
+#players button.pl .rm{margin-left:6px;opacity:.6}
+
+/* --- docked transport --- */
+#dock{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--bg2);
+  border-top:1px solid var(--line);box-shadow:0 -6px 18px rgba(0,0,0,.45)}
+#dock.hidden{display:none}
+.dockbar{display:flex;align-items:center;gap:6px;padding:6px 10px;max-width:1100px;margin:0 auto}
+.docktitle{flex:1;min-width:90px;display:flex;flex-direction:column;gap:2px}
+.docktitle .t{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.docktitle input[type=range]{width:100%;margin:0}
+.docktime{font-size:11px;color:var(--fg2);white-space:nowrap}
+body.docked main{padding-bottom:70px}
+@media(max-width:680px){.docktitle .t{display:none}}
+
+/* --- per-item gain --- */
+.item .gain{font-size:11px;color:var(--acc);min-width:34px;text-align:right}
+#players.solo .plabel{opacity:.5}

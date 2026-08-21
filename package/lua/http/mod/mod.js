@@ -4,7 +4,7 @@
 
 var API = "api.json";
 var S = {}, X = {}, C = {}, CFGVAL = {};
-var curTab = "now", lastArtId = null, plCache = null;
+var curTab = "now", lastArtId = null, plCache = null, canSpawn = false;
 var busy = {};   // element id -> timestamp until which polling must not touch it
 
 /* ------------------------------------------------------------ helpers */
@@ -66,6 +66,11 @@ function qs(o) {
   return p.join("&");
 }
 function enc(v) { return encodeURIComponent(v); }
+
+/* windows "copy as path" wraps paths in quotes, drop them before anything sees the value */
+function unquote(s) {
+  return String(s == null ? "" : s).trim().replace(/^["']+/, "").replace(/["']+$/, "").trim();
+}
 
 function toast(msg, bad) {
   var t = $("toast");
@@ -384,6 +389,7 @@ function initTabs() {
     });
     if (curTab === "playlist") loadPlaylist();
     if (curTab === "browse" && !$("br-list").children.length) browse("~");
+    dockShow(curTab !== "now");
     poll();
   });
 }
@@ -396,6 +402,7 @@ function initDelegated() {
     else if (b.dataset.cmd) { cmd(b.dataset.cmd); }
     else if (b.dataset.seek) { act({ cmd: "seek", val: b.dataset.seek }); }
     else if (b.dataset.rate) { setvar("input", "rate", b.dataset.rate, "float"); }
+    else if (b.dataset.vol) { volStep(parseInt(b.dataset.vol, 10)); }
   });
   $("btnrefresh").addEventListener("click", function () { pollAll(); loadPlaylist(); });
 }
@@ -509,7 +516,7 @@ function initSubs() {
   $("sscale").addEventListener("input", function () { hold("sscale", 2000); $("sscale-val").textContent = this.value + "%"; });
   $("sscale").addEventListener("change", function () { hold("sscale", 1200); setvar("playlist", "sub-text-scale", this.value, "int"); });
   $("subadd").addEventListener("click", function () {
-    var v = $("subpath").value;
+    var v = unquote($("subpath").value);
     if (v) act({ cmd: "addsub", val: v }).then(function () { toast("subtitle loaded"); });
   });
   var send = function () {
@@ -561,7 +568,7 @@ function initVideo() {
 
 function initPlaylist() {
   function collect() {
-    return $("add-uris").value.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+    return $("add-uris").value.split(/\r?\n/).map(unquote).filter(Boolean);
   }
   function add(play) {
     var uris = collect();
@@ -592,9 +599,10 @@ function initPlaylist() {
     var row = e.target.closest(".item");
     if (b) {
       e.stopPropagation();
+      if (b.dataset.act === "gain") { openGain(plFind(b.dataset.plid)); return; }
       if (b.dataset.act === "del") act({ cmd: "pl_delete_many", id: b.dataset.plid }).then(loadPlaylist);
-      if (b.dataset.act === "up") act({ cmd: "pl_move", id: b.dataset.plid, target: Math.max(0, +b.dataset.idx - 1) }).then(loadPlaylist);
-      if (b.dataset.act === "down") act({ cmd: "pl_move", id: b.dataset.plid, target: +b.dataset.idx + 2 }).then(loadPlaylist);
+      if (b.dataset.act === "up") act({ cmd: "pl_move", id: b.dataset.plid, pos: Math.max(1, +b.dataset.idx) }).then(loadPlaylist);
+      if (b.dataset.act === "down") act({ cmd: "pl_move", id: b.dataset.plid, pos: +b.dataset.idx + 2 }).then(loadPlaylist);
       return;
     }
     if (row && row.dataset.plid) cmd("pl_play", { id: row.dataset.plid });
@@ -602,8 +610,8 @@ function initPlaylist() {
 }
 
 function initBrowse() {
-  $("br-go").addEventListener("click", function () { browse($("br-path").value || "~"); });
-  $("br-path").addEventListener("keydown", function (e) { if (e.key === "Enter") browse(this.value || "~"); });
+  $("br-go").addEventListener("click", function () { browse(unquote($("br-path").value) || "~"); });
+  $("br-path").addEventListener("keydown", function (e) { if (e.key === "Enter") browse(unquote(this.value) || "~"); });
   $("br-home").addEventListener("click", function () { browse("~"); });
   $("br-drives").addEventListener("click", function () { browse(""); });
   $("br-up").addEventListener("click", function () { browse(brParent); });
@@ -661,6 +669,7 @@ function refreshOptPreview() {
   $("add-preview").textContent = o ? "applied: :" + o.split(":").join(" :") : "no extra options";
 }
 function addMedia(uris, play) {
+  uris = (uris || []).map(unquote).filter(Boolean);
   if (!uris.length) { toast("nothing to add", true); return Promise.resolve(); }
   return act({ cmd: "pl_add", uri: uris, opts: addOptions(), play: play ? "1" : "0" })
     .then(function () {
@@ -781,14 +790,22 @@ function flatten(node, out) {
   return out;
 }
 /* VLC's root holds two nodes: the real playlist and the media library */
+/* VLC's root holds the playlist (id 1), the media library (id 2), and a node
+   per active discovery service. Only the first two are ours to show. */
 function plGroups() {
   var kids = arr(plCache && plCache.children);
-  if (!kids.length) return [{ name: "Playlist", items: flatten(plCache, []) }];
+  if (!kids.length) return [{ kind: "playlist", name: "Playlist", items: flatten(plCache, []) }];
   return kids.map(function (n) {
-    return { name: n.name || "Playlist", items: flatten(n, []) };
-  });
+    var kind = String(n.id) === "1" ? "playlist" : (String(n.id) === "2" ? "library" : "sd");
+    return { kind: kind, name: n.name || "Playlist", items: flatten(n, []) };
+  }).filter(function (g) { return g.kind !== "sd"; });
 }
-function isLibrary(name) { return /libr|knihov|biblio|mediat/i.test(name || ""); }
+/* just the queue the user actually owns */
+function plItems() {
+  var out = [];
+  plGroups().forEach(function (g) { if (g.kind === "playlist") out = out.concat(g.items); });
+  return out;
+}
 
 function iconFor(it) {
   var e = (it.uri || it.name || "").toLowerCase().replace(/[?#].*$/, "");
@@ -796,6 +813,15 @@ function iconFor(it) {
   if (/\.(jpg|jpeg|png|gif|bmp|webp|tiff)$/.test(e)) return "image";
   if (/^(https?|rtsp|rtmp|mms|udp|rtp):/.test(e)) return "hard-drives";
   return "file-video";
+}
+
+/* look an item up in the cached tree by its playlist id */
+function plFind(id) {
+  var hit = null;
+  plGroups().forEach(function (g) {
+    g.items.forEach(function (i) { if (String(i.id) === String(id)) hit = i; });
+  });
+  return hit || { id: id, uri: "", name: "" };
 }
 
 function plRow(it, idx, readonly) {
@@ -808,10 +834,13 @@ function plRow(it, idx, readonly) {
   n.title = it.uri || "";
   row.appendChild(n);
   row.appendChild(el("span", "dur", it.duration > 0 ? fmt(it.duration) : ""));
+  var g = gainOf(it);
+  if (g != null && Math.abs(g - 1) > 0.001) row.appendChild(el("span", "gain", g.toFixed(2) + "x"));
   if (!readonly) {
-    [["up", "caret-up"], ["down", "caret-down"], ["del", "x"]].forEach(function (a) {
+    [["gain", "sliders-horizontal"], ["up", "caret-up"], ["down", "caret-down"], ["del", "x"]].forEach(function (a) {
       var b = el("button", "lnk");
       b.dataset.ic = a[1]; b.dataset.act = a[0]; b.dataset.plid = it.id; b.dataset.idx = idx;
+      b.title = a[0] === "gain" ? "Item volume and options" : a[0];
       row.appendChild(b);
     });
   }
@@ -825,7 +854,7 @@ function renderPlaylist() {
   list.innerHTML = "";
   var any = false;
   plGroups().forEach(function (g) {
-    if (!showlib && isLibrary(g.name)) return;
+    if (!showlib && g.kind !== "playlist") return;
     var items = f ? g.items.filter(function (i) {
       return (i.name || "").toLowerCase().indexOf(f) >= 0;
     }) : g.items;
@@ -842,8 +871,7 @@ function renderPlaylist() {
 function renderMini() {
   var list = $("np-list");
   if (!list) return;
-  var items = [];
-  plGroups().forEach(function (g) { if (!isLibrary(g.name)) items = items.concat(g.items); });
+  var items = plItems();
   list.innerHTML = "";
   $("np-plcount").textContent = items.length ? items.length + " item(s)" : "";
   if (!items.length) { list.appendChild(el("div", "item muted", "playlist is empty")); return; }
@@ -1051,8 +1079,7 @@ function autoModeSet(m) {
 function autoFire(job) {
   var chain = Promise.resolve();
   if (job.what === "pl_play") {
-    var items = [];
-    plGroups().forEach(function (g) { if (!isLibrary(g.name)) items = items.concat(g.items); });
+    var items = plItems();
     if (items.length) chain = cmd("pl_play", { id: items[0].id });
     else chain = cmd("pl_play");
   } else if (job.what === "pl_next") {
@@ -1214,7 +1241,7 @@ function initDrop() {
     if (!n) return;
     installDrop(n, function (items, missed) {
       if (!items.length) { dropNote(0, missed, "queued"); return; }
-      act({ cmd: "pl_add", uri: items, opts: addOptions(), play: "0" }).then(function () {
+      act({ cmd: "pl_add", uri: items.map(unquote), opts: addOptions(), play: "0" }).then(function () {
         dropNote(items.length, missed, "queued");
         loadPlaylist();
       });
@@ -1242,6 +1269,7 @@ function pollOnce() {
     X = d.ext || {};
     if (d.caps) C = d.caps;
     if (d.now) N = d.now;
+    if (d.can_spawn !== undefined) canSpawn = !!d.can_spawn;
     render();
   }).catch(function () {});
 }
@@ -1402,6 +1430,7 @@ function render() {
     applyIcons(sdBox);
   }
 
+  renderDock();
   if (curTab === "now") renderNowInfo();
   if (curTab === "info") renderInfo();
 }
@@ -1435,9 +1464,233 @@ function renderInfo() {
   $("rawbox").textContent = JSON.stringify({ status: S, ext: X }, null, 1);
 }
 
+/* ------------------------------------------------------------ paste cleanup */
+/* strip the quotes windows puts around a copied path, as the user types or pastes */
+function initSanitize() {
+  ["subpath", "br-path"].forEach(function (id) {
+    var f = $(id);
+    if (!f) return;
+    f.addEventListener("change", function () { this.value = unquote(this.value); });
+  });
+  var ta = $("add-uris");
+  if (ta) ta.addEventListener("paste", function () {
+    var f = this;
+    setTimeout(function () {
+      f.value = f.value.split(/\r?\n/).map(unquote).join("\n");
+    }, 0);
+  });
+}
+
+/* ------------------------------------------------------------ docked transport */
+/* the Now Playing tab has the full controls, every other tab gets this strip */
+function dockShow(on) {
+  $("dock").classList.toggle("hidden", !on);
+  document.body.classList.toggle("docked", on);
+}
+function initDock() {
+  var s = $("dock-seek");
+  s.addEventListener("input", function () { hold("dock-seek", 3000); });
+  s.addEventListener("change", function () {
+    hold("dock-seek", 1200);
+    act({ cmd: "seek", val: (s.value / 10).toFixed(2) + "%" });
+  });
+  $("dock-goto").addEventListener("click", function () {
+    document.querySelector('#tabs button[data-tab="now"]').click();
+  });
+  applyIcons($("dock"));
+}
+function renderDock() {
+  if ($("dock").classList.contains("hidden")) return;
+  $("dock-title").textContent = $("np-title").textContent;
+  if (!held("dock-seek")) $("dock-seek").value = Math.round((S.position || 0) * 1000);
+  $("dock-time").textContent = fmt(S.time) + " / " + fmt(S.length);
+  if (!held("vol")) $("dock-vol").textContent = Math.round((S.volume || 0) * 100 / 256) + "%";
+  setIcon($("dock").querySelector('[data-key="play-pause"]'), S.state === "playing" ? "pause" : "play");
+}
+
+/* nudge the volume, stepping from what the slider shows so quick clicks stack up */
+function volStep(delta) {
+  var pct = Math.max(0, Math.min(200, Math.round(+$("vol").value || 0) + delta));
+  hold("vol", 1500);
+  $("vol").value = pct;
+  $("vol-val").textContent = pct + "%";
+  $("dock-vol").textContent = pct + "%";
+  return act({ cmd: "volume", val: Math.round(pct * 256 / 100) });
+}
+
+/* ------------------------------------------------------------ players */
+/* VLC plays one input per process, so a second stream means a second VLC.
+   Switching player just loads that player's own copy of this page. */
+var PLAYERS_KEY = "vlcplus.players";
+var players = [];
+
+function playerBase(u) {
+  u = unquote(u);
+  if (!/^https?:\/\//i.test(u)) u = "http://" + u;
+  return u.replace(/\/+$/, "").replace(/\/mod$/, "") + "/mod/";
+}
+function playersLoad() {
+  var fromHash = /[#&]players=([^&]+)/.exec(location.hash);
+  if (fromHash) {
+    try { players = JSON.parse(decodeURIComponent(fromHash[1])); } catch (e) { players = []; }
+    playersSave();
+    try { history.replaceState(null, "", location.pathname); } catch (e) {}
+  } else {
+    try { players = JSON.parse(localStorage.getItem(PLAYERS_KEY) || "[]"); } catch (e) { players = []; }
+  }
+  var here = playerBase(location.origin);
+  if (!players.some(function (p) { return p.url === here; })) {
+    players.unshift({ name: "This player", url: here });
+    playersSave();
+  }
+}
+function playersSave() { localStorage.setItem(PLAYERS_KEY, JSON.stringify(players)); }
+function playerGo(p) {
+  if (p.url === playerBase(location.origin)) return;
+  location.href = p.url + "#players=" + encodeURIComponent(JSON.stringify(players));
+}
+function renderPlayers() {
+  var box = $("player-btns");
+  var here = playerBase(location.origin);
+  box.innerHTML = "";
+  players.forEach(function (p, i) {
+    var b = el("button", "pl" + (p.url === here ? " on" : ""), p.name || p.url);
+    b.title = p.url;
+    b.addEventListener("click", function () { playerGo(p); });
+    if (i > 0) {
+      var x = el("span", "rm", "×");
+      x.title = "Forget this player";
+      x.addEventListener("click", function (e) {
+        e.stopPropagation();
+        players.splice(i, 1); playersSave(); renderPlayers();
+      });
+      b.appendChild(x);
+    }
+    box.appendChild(b);
+  });
+  $("players").classList.toggle("solo", players.length < 2);
+}
+function initPlayers() {
+  playersLoad();
+  renderPlayers();
+  $("player-add").addEventListener("click", function () {
+    $("pd-name").value = "Player " + (players.length + 1);
+    $("pd-url").value = "http://" + location.hostname + ":" + (8080 + players.length);
+    $("pd-spawnbox").classList.toggle("hidden", !canSpawn);
+    $("player-dlg").showModal();
+  });
+  $("pd-cancel").addEventListener("click", function () { $("player-dlg").close(); });
+  $("pd-save").addEventListener("click", function () {
+    var u = playerBase($("pd-url").value);
+    if (!u) return;
+    players.push({ name: $("pd-name").value || u, url: u });
+    playersSave(); renderPlayers();
+    $("player-dlg").close();
+    toast("player added — click it to switch");
+  });
+  $("pd-spawn").addEventListener("click", function () {
+    var m = /:(\d+)/.exec($("pd-url").value);
+    var port = m ? m[1] : 8081;
+    var pw = $("pd-pw").value;
+    if (!pw) { toast("VLC will not open the web interface without a password", true); return; }
+    act({ cmd: "spawn", port: port, pw: pw }).then(function (d) {
+      if (d.spawned) toast("started a VLC on port " + port + " — give it a few seconds, then add it");
+      else toast("could not start it: " + (d.spawn_cmd || ""), true);
+    });
+  });
+}
+
+/* ------------------------------------------------------------ per-item gain */
+/* VLC reads item options once, at add time, and never reports them back,
+   so remember what we set and re-add the item to change it */
+var GAIN_KEY = "vlcplus.gains";
+var gains = {};
+var gainItem = null;
+
+function gainsLoad() {
+  try { gains = JSON.parse(localStorage.getItem(GAIN_KEY) || "{}"); } catch (e) { gains = {}; }
+}
+function gainsSave() { localStorage.setItem(GAIN_KEY, JSON.stringify(gains)); }
+function gainOf(it) {
+  var g = gains[it.uri];
+  return g ? g.gain : null;
+}
+function openGain(it) {
+  gainItem = it;
+  var rec = gains[it.uri] || {};
+  $("gd-name").textContent = it.name || it.uri;
+  $("gd-gain").value = rec.gain != null ? rec.gain : 1;
+  $("gd-opts").value = rec.opts || "";
+  $("gd-val").textContent = (+$("gd-gain").value).toFixed(2) + "x";
+  $("gain-dlg").showModal();
+}
+/* every id currently in the tree, used to spot the copy we just queued */
+function plIds() {
+  var s = {};
+  plGroups().forEach(function (g) { g.items.forEach(function (i) { s[String(i.id)] = true; }); });
+  return s;
+}
+/* 1-based slot of an item inside the real playlist node */
+function plSlot(id) {
+  var groups = plGroups(), slot = 0;
+  groups.forEach(function (g) {
+    if (g.kind !== "playlist") return;
+    g.items.forEach(function (i, n) { if (String(i.id) === String(id)) slot = n + 1; });
+  });
+  return slot;
+}
+
+/* doing this in one request corrupts VLC's playlist, so keep the steps apart */
+function applyGain() {
+  if (!gainItem) return;
+  var it = gainItem;
+  $("gain-dlg").close();
+  var g = +$("gd-gain").value;
+  var extra = $("gd-opts").value.trim();
+  var o = [];
+  if (Math.abs(g - 1) > 0.001) o.push("gain=" + g);
+  extra.split(":").forEach(function (x) { x = x.trim(); if (x) o.push(x); });
+
+  var slot = plSlot(it.id);
+  if (!slot) { toast("only playlist items can be re-added", true); return; }
+  var wasCurrent = !!it.current;
+  var before = plIds();
+
+  api({ cmd: "pl_add", uri: it.uri, opts: o.join(":"), play: "0", name: it.name })
+    .then(loadPlaylist)
+    .then(function () {
+      var fresh = null;
+      plGroups().forEach(function (grp) {
+        grp.items.forEach(function (i) { if (!before[String(i.id)]) fresh = i; });
+      });
+      if (!fresh) throw new Error("the copy did not appear in the playlist");
+      return api({ cmd: "pl_move", id: fresh.id, pos: slot })
+        .then(function () { return api({ cmd: "pl_delete_many", id: it.id }); })
+        .then(loadPlaylist)
+        .then(function () {
+          gains[it.uri] = { gain: g, opts: extra };
+          gainsSave();
+          if (wasCurrent) return cmd("pl_play", { id: fresh.id });
+        })
+        .then(function () {
+          toast("item set to " + g.toFixed(2) + "x" + (wasCurrent ? ", restarted" : ""));
+        });
+    })
+    .catch(function (e) { toast(e.message, true); });
+}
+function initGain() {
+  gainsLoad();
+  $("gd-gain").addEventListener("input", function () {
+    $("gd-val").textContent = (+this.value).toFixed(2) + "x";
+  });
+  $("gd-cancel").addEventListener("click", function () { $("gain-dlg").close(); });
+  $("gd-save").addEventListener("click", applyGain);
+}
+
 /* ------------------------------------------------------------ boot */
 initTabs(); initDelegated(); initNow(); initAudio(); initSubs(); initVideo();
 initPlaylist(); initBrowse(); initKeys(); initAuto(); initDrop(); initPauseNext();
+initSanitize(); initDock(); initGain(); initPlayers();
 applyIcons();
 pollAll();
 loadPlaylist();
